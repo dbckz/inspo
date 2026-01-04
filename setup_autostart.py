@@ -212,15 +212,20 @@ def setup_macos_autostart():
     # Setup virtualenv first
     setup_virtualenv()
 
-    # Create a wrapper script that uses uv run
+    # Create a wrapper script that uses system Python (has Tcl/Tk)
     wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
 # Wait a moment for the display to be ready after wake
 sleep 2
 
-# Run the app using uv
 cd "{project_path}"
-{uv_path} run python inspo_app.py
+
+# Use system Python which has Tcl/Tk support
+# Install requests if needed (suppress output)
+/usr/bin/python3 -c "import requests" 2>/dev/null || /usr/bin/python3 -m pip install --user --quiet requests
+
+# Run with system Python
+/usr/bin/python3 inspo_app.py
 """
 
     with open(wrapper_path, 'w') as f:
