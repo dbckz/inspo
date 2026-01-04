@@ -323,13 +323,18 @@ class QuoteView(NSView):
         return True
 
     def keyDown_(self, event):
-        """Handle key events."""
+        """Handle key events - consume all keys to prevent system beep."""
         if self.can_exit:
             # Any key closes after timer
             NSApp.terminate_(None)
-        else:
-            # Show reminder
-            self.setNeedsDisplay_(True)
+        # Don't call super or interpretKeyEvents_ - just consume the event silently
+
+    def performKeyEquivalent_(self, event):
+        """Handle key equivalents to prevent system beep."""
+        if self.can_exit:
+            NSApp.terminate_(None)
+            return True
+        return True  # Return True to indicate we handled it (prevents beep)
 
     def mouseDown_(self, event):
         """Handle mouse clicks."""
