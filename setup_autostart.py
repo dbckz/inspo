@@ -3,24 +3,59 @@
 Setup autostart for the Inspirational Quotes app.
 
 This script configures the app to run automatically when you log in.
+Uses uv for virtual environment management.
 Supports Linux (with desktop environments) and macOS.
 """
 
 import os
 import sys
 import stat
+import shutil
 import platform
+import subprocess
 from pathlib import Path
+
+
+def get_project_path() -> Path:
+    """Get the absolute path to the project directory."""
+    return Path(__file__).parent.resolve()
 
 
 def get_app_path() -> Path:
     """Get the absolute path to the main app."""
-    return Path(__file__).parent.resolve() / "inspo_app.py"
+    return get_project_path() / "inspo_app.py"
 
 
-def get_python_path() -> str:
-    """Get the Python interpreter path."""
-    return sys.executable
+def check_uv_installed() -> bool:
+    """Check if uv is installed."""
+    return shutil.which("uv") is not None
+
+
+def setup_virtualenv():
+    """Create virtualenv and install dependencies using uv."""
+    project_path = get_project_path()
+
+    if not check_uv_installed():
+        print("ERROR: uv is not installed!")
+        print("Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh")
+        sys.exit(1)
+
+    print("Setting up virtual environment with uv...")
+
+    # Create venv and sync dependencies
+    result = subprocess.run(
+        ["uv", "sync"],
+        cwd=project_path,
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(f"Error setting up virtualenv: {result.stderr}")
+        sys.exit(1)
+
+    print("Virtual environment created and dependencies installed!")
+    return project_path / ".venv"
 
 
 def setup_linux_autostart():
@@ -29,11 +64,13 @@ def setup_linux_autostart():
     autostart_dir.mkdir(parents=True, exist_ok=True)
 
     desktop_file = autostart_dir / "inspo-quotes.desktop"
-    app_path = get_app_path()
-    python_path = get_python_path()
+    project_path = get_project_path()
 
-    # Create the wrapper script for proper display handling
-    wrapper_path = app_path.parent / "run_inspo.sh"
+    # Setup virtualenv first
+    setup_virtualenv()
+
+    # Create the wrapper script that uses uv run
+    wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
 # Wait a moment for the desktop to fully load
 sleep 3
@@ -41,9 +78,9 @@ sleep 3
 # Set display if not set
 export DISPLAY="${{DISPLAY:-:0}}"
 
-# Run the app
-cd "{app_path.parent}"
-{python_path} "{app_path}"
+# Run the app using uv
+cd "{project_path}"
+uv run python inspo_app.py
 """
 
     with open(wrapper_path, 'w') as f:
@@ -80,8 +117,13 @@ def setup_macos_autostart():
     launch_agents_dir.mkdir(parents=True, exist_ok=True)
 
     plist_file = launch_agents_dir / "com.inspo.quotes.plist"
-    app_path = get_app_path()
-    python_path = get_python_path()
+    project_path = get_project_path()
+
+    # Setup virtualenv first
+    setup_virtualenv()
+
+    # Find uv path
+    uv_path = shutil.which("uv")
 
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -91,9 +133,13 @@ def setup_macos_autostart():
     <string>com.inspo.quotes</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{python_path}</string>
-        <string>{app_path}</string>
+        <string>{uv_path}</string>
+        <string>run</string>
+        <string>python</string>
+        <string>inspo_app.py</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>{project_path}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>LaunchOnlyOnce</key>
@@ -120,7 +166,7 @@ def setup_macos_autostart():
 def remove_linux_autostart():
     """Remove Linux autostart configuration."""
     desktop_file = Path.home() / ".config" / "autostart" / "inspo-quotes.desktop"
-    wrapper_path = get_app_path().parent / "run_inspo.sh"
+    wrapper_path = get_project_path() / "run_inspo.sh"
 
     if desktop_file.exists():
         desktop_file.unlink()
@@ -150,7 +196,7 @@ def main():
     system = platform.system()
 
     print("=" * 60)
-    print("Inspirational Quotes - Autostart Setup")
+    print("Inspirational Quotes - Autostart Setup (using uv)")
     print("=" * 60)
     print()
 
@@ -163,6 +209,15 @@ def main():
         else:
             print(f"Unsupported platform: {system}")
         return
+
+    # Check for uv
+    if not check_uv_installed():
+        print("ERROR: uv is not installed!")
+        print()
+        print("Install uv with:")
+        print("  curl -LsSf https://astral.sh/uv/install.sh | sh")
+        print()
+        sys.exit(1)
 
     print(f"Detected platform: {system}")
     print()
@@ -179,7 +234,8 @@ def main():
     print()
     print("=" * 60)
     print("Setup complete! Test the app by running:")
-    print(f"  python {get_app_path()}")
+    print(f"  cd {get_project_path()}")
+    print("  uv run python inspo_app.py")
     print()
     print("To remove autostart, run:")
     print(f"  python {__file__} --remove")

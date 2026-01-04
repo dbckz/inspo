@@ -11,15 +11,18 @@ A vibrant fullscreen app that displays inspirational quotes from your Google Doc
 - Automatic startup when you log in
 - Works on Linux and macOS
 
-## Quick Start
+## Prerequisites
 
-### 1. Install Dependencies
+This project uses [uv](https://github.com/astral-sh/uv) for fast Python package management.
 
+Install uv:
 ```bash
-pip install -r requirements.txt
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Set Up Your Google Doc
+## Quick Start
+
+### 1. Set Up Your Google Doc
 
 1. Create a Google Doc with your favorite inspirational quotes
 2. Put each quote on its own line
@@ -35,7 +38,7 @@ In the middle of difficulty lies opportunity. - Albert Einstein
 The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt
 ```
 
-### 3. Configure the App
+### 2. Configure the App
 
 Edit `config.py` and replace `YOUR_DOCUMENT_ID` with your Google Doc URL:
 
@@ -43,21 +46,28 @@ Edit `config.py` and replace `YOUR_DOCUMENT_ID` with your Google Doc URL:
 GOOGLE_DOC_URL = "https://docs.google.com/document/d/YOUR_ACTUAL_DOC_ID/edit"
 ```
 
-### 4. Test the App
+### 3. Test the App
 
 ```bash
-python inspo_app.py
+uv run python inspo_app.py
 ```
+
+This will automatically create a virtual environment and install dependencies on first run.
 
 A fullscreen display will appear with a random quote. Wait 30 seconds, then press `ESC` or `Q` to exit.
 
-### 5. Set Up Autostart
+### 4. Set Up Autostart
 
 Run the setup script to configure automatic startup:
 
 ```bash
 python setup_autostart.py
 ```
+
+This will:
+- Create a virtual environment with uv
+- Install all dependencies
+- Configure the app to run at login
 
 Now the app will run every time you log into your computer!
 
@@ -82,7 +92,8 @@ inspo/
 ├── quote_fetcher.py      # Google Docs fetching logic
 ├── config.py             # Configuration settings
 ├── setup_autostart.py    # Autostart setup script
-├── requirements.txt      # Python dependencies
+├── pyproject.toml        # Project configuration for uv
+├── requirements.txt      # Python dependencies (legacy)
 └── README.md             # This file
 ```
 
@@ -103,6 +114,15 @@ python setup_autostart.py --remove
 
 ## Troubleshooting
 
+### uv not found
+
+Install uv with:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`).
+
 ### Quotes not loading from Google Doc
 
 1. Ensure the document is shared publicly ("Anyone with the link")
@@ -119,7 +139,7 @@ python setup_autostart.py --remove
 
 1. Ensure you have a graphical environment running
 2. On Linux, the `DISPLAY` environment variable must be set
-3. Try running `python inspo_app.py` manually to test
+3. Try running `uv run python inspo_app.py` manually to test
 
 ## Adding Custom Color Schemes
 
