@@ -11,6 +11,8 @@ import tkinter as tk
 from tkinter import font as tkfont
 import math
 import sys
+import platform
+import subprocess
 
 from config import (
     COLOR_SCHEMES,
@@ -26,13 +28,34 @@ class InspirationApp:
         self.root = tk.Tk()
         self.root.title("Daily Inspiration")
 
+        # macOS-specific: activate the app to bring it to front
+        if platform.system() == "Darwin":
+            self._activate_macos_app()
+
         # Get screen dimensions
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
 
+        # Set window size explicitly before going fullscreen
+        self.root.geometry(f"{self.screen_width}x{self.screen_height}+0+0")
+
         # Make fullscreen and always on top
         self.root.attributes('-fullscreen', True)
         self.root.attributes('-topmost', True)
+
+        # macOS-specific: ensure window is above all others
+        if platform.system() == "Darwin":
+            try:
+                self.root.attributes('-topmost', True)
+                self.root.call('::tk::unsupported::MacWindowStyle', 'style',
+                              self.root._w, 'plain', 'none')
+            except tk.TclError:
+                pass  # Ignore if this fails
+
+        # Force focus
+        self.root.lift()
+        self.root.focus_force()
+        self.root.update()
 
         # Disable window close button initially
         self.root.protocol("WM_DELETE_WINDOW", self.try_exit)
@@ -368,6 +391,33 @@ class InspirationApp:
         """Convert hex color to RGB tuple."""
         color = color.lstrip('#')
         return tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
+
+    def _activate_macos_app(self):
+        """Activate the app on macOS to bring it to the foreground."""
+        try:
+            # Use AppleScript to activate Python and bring window to front
+            script = '''
+            tell application "System Events"
+                set frontmost of every process whose unix id is {} to true
+            end tell
+            '''.format(subprocess.getoutput("echo $$"))
+            subprocess.run(["osascript", "-e", script], capture_output=True)
+        except Exception:
+            pass  # Ignore errors, window will still show
+
+        # Also try to activate via Python process name
+        try:
+            script = '''
+            tell application "System Events"
+                set processList to every process whose name contains "Python"
+                repeat with proc in processList
+                    set frontmost of proc to true
+                end repeat
+            end tell
+            '''
+            subprocess.run(["osascript", "-e", script], capture_output=True)
+        except Exception:
+            pass
 
     def run(self):
         """Run the application."""
