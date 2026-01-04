@@ -28,41 +28,21 @@ class InspirationApp:
         self.root = tk.Tk()
         self.root.title("Daily Inspiration")
 
-        # Get screen dimensions first
-        self.root.update_idletasks()
+        # Select random color scheme early
+        self.colors = random.choice(COLOR_SCHEMES)
+
+        # Get screen dimensions
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
 
-        # Select random color scheme early (needed for background)
-        self.colors = random.choice(COLOR_SCHEMES)
+        # Set background color immediately
+        self.root.configure(bg=self.colors["bg"])
 
-        # Configure for true fullscreen on macOS
-        if platform.system() == "Darwin":
-            # Remove window decorations
-            self.root.overrideredirect(True)
-            # Set geometry to cover entire screen
-            self.root.geometry(f"{self.screen_width}x{self.screen_height}+0+0")
-            # Set window level to be above everything
-            self.root.attributes('-topmost', True)
-            # Set background color
-            self.root.configure(bg=self.colors["bg"])
-            # Activate app
-            self._activate_macos_app()
-        else:
-            # Linux/other - use standard fullscreen
-            self.root.attributes('-fullscreen', True)
-            self.root.attributes('-topmost', True)
-            self.root.configure(bg=self.colors["bg"])
+        # Configure fullscreen - works on both macOS and Linux
+        self.root.attributes('-fullscreen', True)
+        self.root.attributes('-topmost', True)
 
-        # Force window to update and show
-        self.root.update_idletasks()
-        self.root.update()
-
-        # Force focus
-        self.root.lift()
-        self.root.focus_force()
-
-        # Disable window close button initially
+        # Disable window close button
         self.root.protocol("WM_DELETE_WINDOW", self.try_exit)
 
         # Block escape key initially
@@ -121,10 +101,13 @@ class InspirationApp:
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Force canvas to update
-        self.root.update_idletasks()
+        # Fill canvas with background color as a rectangle (more reliable)
+        self.canvas.create_rectangle(
+            0, 0, self.screen_width, self.screen_height,
+            fill=self.colors["bg"], outline=""
+        )
 
-        # Draw initial background
+        # Draw gradient background
         self.draw_background()
 
         # Create fonts
