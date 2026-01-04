@@ -212,20 +212,26 @@ def setup_macos_autostart():
     # Setup virtualenv first
     setup_virtualenv()
 
-    # Create a wrapper script that uses system Python (has Tcl/Tk)
+    # Create a wrapper script that sources shell profile for proper environment
     wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
 # Wait a moment for the display to be ready after wake
 sleep 2
 
+# Source shell profile to get the same environment as terminal
+# This ensures uv and Tcl/Tk paths are available
+if [ -f "$HOME/.zshrc" ]; then
+    source "$HOME/.zshrc" 2>/dev/null
+elif [ -f "$HOME/.bash_profile" ]; then
+    source "$HOME/.bash_profile" 2>/dev/null
+elif [ -f "$HOME/.bashrc" ]; then
+    source "$HOME/.bashrc" 2>/dev/null
+fi
+
 cd "{project_path}"
 
-# Use system Python which has Tcl/Tk support
-# Install requests if needed (suppress output)
-/usr/bin/python3 -c "import requests" 2>/dev/null || /usr/bin/python3 -m pip install --user --quiet requests
-
-# Run with system Python
-/usr/bin/python3 inspo_app.py
+# Run with uv (works because we sourced the shell profile)
+{uv_path} run python inspo_app.py
 """
 
     with open(wrapper_path, 'w') as f:
