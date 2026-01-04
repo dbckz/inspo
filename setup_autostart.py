@@ -176,8 +176,33 @@ WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibern
     print("  - Will run on wake from sleep (systemd service)")
 
 
+def compile_unlock_watcher(project_path: Path) -> Path:
+    """Compile the Swift unlock watcher binary."""
+    swift_source = project_path / "unlock_watcher.swift"
+    binary_path = project_path / "unlock_watcher"
+
+    if not swift_source.exists():
+        print(f"Warning: {swift_source} not found, skipping unlock watcher")
+        return None
+
+    print("Compiling unlock watcher...")
+    result = subprocess.run(
+        ["swiftc", "-o", str(binary_path), str(swift_source)],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(f"Warning: Failed to compile unlock watcher: {result.stderr}")
+        return None
+
+    os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    print(f"Unlock watcher compiled: {binary_path}")
+    return binary_path
+
+
 def setup_macos_autostart():
-    """Setup autostart for macOS - both login and wake from sleep."""
+    """Setup autostart for macOS - login, wake from sleep, and screen unlock."""
     launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
     launch_agents_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,17 +226,6 @@ cd "{project_path}"
     with open(wrapper_path, 'w') as f:
         f.write(wrapper_content)
     os.chmod(wrapper_path, os.stat(wrapper_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-    # Create a sleep watcher script that triggers on wake
-    watcher_path = project_path / "sleep_watcher.sh"
-    watcher_content = f"""#!/bin/bash
-# This script is called by sleepwatcher on wake from sleep
-{wrapper_path}
-"""
-
-    with open(watcher_path, 'w') as f:
-        f.write(watcher_content)
-    os.chmod(watcher_path, os.stat(watcher_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     # 1. LaunchAgent for login
     plist_file = launch_agents_dir / "com.inspo.quotes.plist"
@@ -244,60 +258,58 @@ cd "{project_path}"
 
     print(f"Login autostart configured: {plist_file}")
 
-    # 2. Check for sleepwatcher or install instructions
-    sleepwatcher_installed = shutil.which("sleepwatcher") is not None
+    # 2. Compile and setup unlock watcher (for Touch ID and screen unlock)
+    unlock_binary = compile_unlock_watcher(project_path)
 
-    if sleepwatcher_installed:
-        # Create .wakeup file in home directory
-        wakeup_file = Path.home() / ".wakeup"
-        with open(wakeup_file, 'w') as f:
-            f.write(f"#!/bin/bash\n{wrapper_path}\n")
-        os.chmod(wakeup_file, os.stat(wakeup_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-        # Create sleepwatcher LaunchAgent
-        sw_plist_file = launch_agents_dir / "com.inspo.sleepwatcher.plist"
-        sw_plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    if unlock_binary:
+        unlock_plist_file = launch_agents_dir / "com.inspo.unlockwatcher.plist"
+        unlock_plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.inspo.sleepwatcher</string>
+    <string>com.inspo.unlockwatcher</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/sbin/sleepwatcher</string>
-        <string>-w</string>
-        <string>{wakeup_file}</string>
+        <string>{unlock_binary}</string>
+        <string>{wrapper_path}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/inspo-unlock-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/inspo-unlock-watcher.err</string>
 </dict>
 </plist>
 """
-        with open(sw_plist_file, 'w') as f:
-            f.write(sw_plist_content)
+        with open(unlock_plist_file, 'w') as f:
+            f.write(unlock_plist_content)
 
-        os.system(f"launchctl unload {sw_plist_file} 2>/dev/null")
-        os.system(f"launchctl load {sw_plist_file}")
+        os.system(f"launchctl unload {unlock_plist_file} 2>/dev/null")
+        os.system(f"launchctl load {unlock_plist_file}")
 
-        print(f"Wake-from-sleep configured with sleepwatcher: {sw_plist_file}")
+        print(f"Screen unlock watcher configured: {unlock_plist_file}")
         print()
         print("macOS setup complete!")
         print("  - Will run on login")
-        print("  - Will run on wake from sleep (via sleepwatcher)")
+        print("  - Will run on screen unlock (Touch ID, password, etc.)")
+        print("  - Will run on wake from sleep")
+        print()
+        print("Note: There's a 60-second cooldown between triggers to prevent duplicates.")
     else:
         print()
         print("macOS login autostart configured!")
         print()
-        print("For WAKE FROM SLEEP support, install sleepwatcher:")
-        print("  brew install sleepwatcher")
-        print()
+        print("Note: Screen unlock detection requires Swift compiler (Xcode).")
+        print("Install Xcode Command Line Tools: xcode-select --install")
         print("Then run this setup script again.")
         print()
         print("Currently configured:")
         print("  - Will run on login")
-        print("  - Will NOT run on wake from sleep (sleepwatcher not installed)")
+        print("  - Will NOT run on screen unlock (Swift compiler not available)")
 
 
 def remove_linux_autostart():
@@ -332,32 +344,27 @@ def remove_linux_autostart():
 def remove_macos_autostart():
     """Remove macOS autostart configuration."""
     plist_file = Path.home() / "Library" / "LaunchAgents" / "com.inspo.quotes.plist"
-    sw_plist_file = Path.home() / "Library" / "LaunchAgents" / "com.inspo.sleepwatcher.plist"
-    wakeup_file = Path.home() / ".wakeup"
+    unlock_plist_file = Path.home() / "Library" / "LaunchAgents" / "com.inspo.unlockwatcher.plist"
     wrapper_path = get_project_path() / "run_inspo.sh"
-    watcher_path = get_project_path() / "sleep_watcher.sh"
+    unlock_binary = get_project_path() / "unlock_watcher"
 
     if plist_file.exists():
         os.system(f"launchctl unload {plist_file} 2>/dev/null")
         plist_file.unlink()
         print(f"Removed: {plist_file}")
 
-    if sw_plist_file.exists():
-        os.system(f"launchctl unload {sw_plist_file} 2>/dev/null")
-        sw_plist_file.unlink()
-        print(f"Removed: {sw_plist_file}")
-
-    if wakeup_file.exists():
-        wakeup_file.unlink()
-        print(f"Removed: {wakeup_file}")
+    if unlock_plist_file.exists():
+        os.system(f"launchctl unload {unlock_plist_file} 2>/dev/null")
+        unlock_plist_file.unlink()
+        print(f"Removed: {unlock_plist_file}")
 
     if wrapper_path.exists():
         wrapper_path.unlink()
         print(f"Removed: {wrapper_path}")
 
-    if watcher_path.exists():
-        watcher_path.unlink()
-        print(f"Removed: {watcher_path}")
+    if unlock_binary.exists():
+        unlock_binary.unlink()
+        print(f"Removed: {unlock_binary}")
 
     print("macOS autostart removed.")
 
@@ -373,6 +380,7 @@ def main():
     print("This will configure the app to run:")
     print("  1. When you log in")
     print("  2. When your laptop wakes from sleep")
+    print("  3. When you unlock your screen (macOS: Touch ID, password, etc.)")
     print()
 
     if len(sys.argv) > 1 and sys.argv[1] == "--remove":
