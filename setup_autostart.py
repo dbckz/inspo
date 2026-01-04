@@ -212,32 +212,51 @@ def setup_macos_autostart():
     # Setup virtualenv first
     setup_virtualenv()
 
-    # Create a wrapper script that uses Homebrew Python (has Tcl/Tk)
+    # Create a wrapper script that uses uv with proper Tcl/Tk environment
     wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
+
+# Timestamp function for logging
+ts() {{ date "+%Y-%m-%d %H:%M:%S"; }}
+
+echo "$(ts) [INFO] Starting inspo app wrapper..."
+echo "$(ts) [INFO] Working directory: {project_path}"
+
 # Wait a moment for the display to be ready after wake
 sleep 2
 
 cd "{project_path}"
 
-# Try different Python options in order of preference:
-# 1. Homebrew Python (Apple Silicon) - has Tcl/Tk
-# 2. Homebrew Python (Intel) - has Tcl/Tk
-# 3. System Python - has Tcl/Tk but may need pip install
-
-if [ -x "/opt/homebrew/bin/python3" ]; then
-    # Apple Silicon Homebrew Python
-    /opt/homebrew/bin/python3 -c "import requests" 2>/dev/null || /opt/homebrew/bin/python3 -m pip install --quiet requests
-    exec /opt/homebrew/bin/python3 inspo_app.py
-elif [ -x "/usr/local/bin/python3" ]; then
-    # Intel Homebrew Python
-    /usr/local/bin/python3 -c "import requests" 2>/dev/null || /usr/local/bin/python3 -m pip install --quiet requests
-    exec /usr/local/bin/python3 inspo_app.py
-else
-    # Fallback to system Python
-    /usr/bin/python3 -c "import requests" 2>/dev/null || /usr/bin/python3 -m pip install --user --quiet requests
-    exec /usr/bin/python3 inspo_app.py
+# Source shell profile to get uv and other tools in PATH
+if [ -f "$HOME/.zshrc" ]; then
+    echo "$(ts) [INFO] Sourcing .zshrc..."
+    source "$HOME/.zshrc" 2>/dev/null
 fi
+
+# Set up Tcl/Tk environment for uv's Python
+# Apple Silicon Homebrew location
+if [ -d "/opt/homebrew/opt/tcl-tk/lib" ]; then
+    echo "$(ts) [INFO] Found Homebrew Tcl/Tk (Apple Silicon)"
+    export TCL_LIBRARY="/opt/homebrew/opt/tcl-tk/lib/tcl8.6"
+    export TK_LIBRARY="/opt/homebrew/opt/tcl-tk/lib/tk8.6"
+    export DYLD_LIBRARY_PATH="/opt/homebrew/opt/tcl-tk/lib:$DYLD_LIBRARY_PATH"
+# Intel Homebrew location
+elif [ -d "/usr/local/opt/tcl-tk/lib" ]; then
+    echo "$(ts) [INFO] Found Homebrew Tcl/Tk (Intel)"
+    export TCL_LIBRARY="/usr/local/opt/tcl-tk/lib/tcl8.6"
+    export TK_LIBRARY="/usr/local/opt/tcl-tk/lib/tk8.6"
+    export DYLD_LIBRARY_PATH="/usr/local/opt/tcl-tk/lib:$DYLD_LIBRARY_PATH"
+fi
+
+# Add common paths to PATH
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+echo "$(ts) [INFO] TCL_LIBRARY=$TCL_LIBRARY"
+echo "$(ts) [INFO] TK_LIBRARY=$TK_LIBRARY"
+echo "$(ts) [INFO] Running uv run python inspo_app.py..."
+
+# Run with uv (which works in terminal)
+exec {uv_path} run python inspo_app.py 2>&1
 """
 
     with open(wrapper_path, 'w') as f:

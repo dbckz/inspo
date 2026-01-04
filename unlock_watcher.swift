@@ -11,6 +11,18 @@
 import Foundation
 import Cocoa
 
+// Timestamp formatter
+func timestamp() -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return formatter.string(from: Date())
+}
+
+func log(_ message: String) {
+    print("[\(timestamp())] \(message)")
+    fflush(stdout)  // Ensure immediate output
+}
+
 class ScreenUnlockWatcher {
     let scriptPath: String
     var lastTriggerTime: Date = Date.distantPast
@@ -46,7 +58,7 @@ class ScreenUnlockWatcher {
             object: nil
         )
 
-        print("Unlock watcher started. Listening for screen unlock events...")
+        log("Unlock watcher started. Listening for screen unlock events...")
     }
 
     @objc func screenUnlocked(_ notification: Notification) {
@@ -66,12 +78,12 @@ class ScreenUnlockWatcher {
 
         // Check cooldown to prevent multiple triggers
         if now.timeIntervalSince(lastTriggerTime) < cooldownSeconds {
-            print("Skipping trigger (\(reason)) - cooldown active")
+            log("Skipping trigger (\(reason)) - cooldown active")
             return
         }
 
         lastTriggerTime = now
-        print("Triggering quote app: \(reason)")
+        log("Triggering quote app: \(reason)")
 
         let task = Process()
         task.launchPath = "/bin/bash"
@@ -80,7 +92,7 @@ class ScreenUnlockWatcher {
         do {
             try task.run()
         } catch {
-            print("Error launching quote app: \(error)")
+            log("Error launching quote app: \(error)")
         }
     }
 
@@ -93,7 +105,7 @@ class ScreenUnlockWatcher {
 // Main entry point
 let args = CommandLine.arguments
 guard args.count > 1 else {
-    print("Usage: unlock_watcher <path-to-run-script>")
+    log("Usage: unlock_watcher <path-to-run-script>")
     exit(1)
 }
 
@@ -101,7 +113,7 @@ let scriptPath = args[1]
 
 // Verify the script exists
 guard FileManager.default.fileExists(atPath: scriptPath) else {
-    print("Error: Script not found at \(scriptPath)")
+    log("Error: Script not found at \(scriptPath)")
     exit(1)
 }
 
