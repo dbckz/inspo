@@ -8,7 +8,7 @@ A vibrant fullscreen app that displays inspirational quotes from your Google Doc
 - Fullscreen display with vibrant, randomly-selected color schemes
 - Animated gradient backgrounds and floating decorations
 - 30-second mandatory reflection period before dismissal
-- Automatic startup when you log in
+- **Runs automatically on login AND when opening your laptop (wake from sleep)**
 - Works on Linux and macOS
 
 ## Prerequisites
@@ -67,9 +67,12 @@ python setup_autostart.py
 This will:
 - Create a virtual environment with uv
 - Install all dependencies
-- Configure the app to run at login
+- Configure the app to run on **login** and **wake from sleep**
 
-Now the app will run every time you log into your computer!
+**Linux:** Uses desktop autostart + systemd user service for wake detection
+**macOS:** Uses LaunchAgent + sleepwatcher (install with `brew install sleepwatcher`)
+
+Now the app will run every time you log in or open your laptop!
 
 ## Configuration Options
 

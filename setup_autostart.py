@@ -2,9 +2,12 @@
 """
 Setup autostart for the Inspirational Quotes app.
 
-This script configures the app to run automatically when you log in.
+This script configures the app to run automatically when:
+- You log in
+- Your laptop wakes from sleep/suspend
+
 Uses uv for virtual environment management.
-Supports Linux (with desktop environments) and macOS.
+Supports Linux (with systemd) and macOS.
 """
 
 import os
@@ -29,6 +32,19 @@ def get_app_path() -> Path:
 def check_uv_installed() -> bool:
     """Check if uv is installed."""
     return shutil.which("uv") is not None
+
+
+def get_uv_path() -> str:
+    """Get the full path to uv."""
+    uv_path = shutil.which("uv")
+    if uv_path:
+        return uv_path
+    # Common locations if not in PATH
+    for path in ["~/.cargo/bin/uv", "~/.local/bin/uv", "/usr/local/bin/uv"]:
+        expanded = os.path.expanduser(path)
+        if os.path.exists(expanded):
+            return expanded
+    return "uv"
 
 
 def setup_virtualenv():
@@ -59,12 +75,9 @@ def setup_virtualenv():
 
 
 def setup_linux_autostart():
-    """Setup autostart for Linux desktop environments (GNOME, KDE, XFCE, etc.)."""
-    autostart_dir = Path.home() / ".config" / "autostart"
-    autostart_dir.mkdir(parents=True, exist_ok=True)
-
-    desktop_file = autostart_dir / "inspo-quotes.desktop"
+    """Setup autostart for Linux - both login and wake from suspend."""
     project_path = get_project_path()
+    uv_path = get_uv_path()
 
     # Setup virtualenv first
     setup_virtualenv()
@@ -72,23 +85,35 @@ def setup_linux_autostart():
     # Create the wrapper script that uses uv run
     wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
-# Wait a moment for the desktop to fully load
-sleep 3
+# Wrapper script to run the inspirational quotes app
 
-# Set display if not set
-export DISPLAY="${{DISPLAY:-:0}}"
+# Wait a moment for the desktop/display to be ready
+sleep 2
+
+# Try to find the display
+if [ -z "$DISPLAY" ]; then
+    export DISPLAY=:0
+fi
+
+# Get the current user's DBUS session
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+fi
 
 # Run the app using uv
 cd "{project_path}"
-uv run python inspo_app.py
+{uv_path} run python inspo_app.py
 """
 
     with open(wrapper_path, 'w') as f:
         f.write(wrapper_content)
-
-    # Make wrapper executable
     os.chmod(wrapper_path, os.stat(wrapper_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
+    # 1. Setup desktop autostart for login
+    autostart_dir = Path.home() / ".config" / "autostart"
+    autostart_dir.mkdir(parents=True, exist_ok=True)
+
+    desktop_file = autostart_dir / "inspo-quotes.desktop"
     desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=Inspirational Quotes
@@ -105,26 +130,91 @@ Terminal=false
     with open(desktop_file, 'w') as f:
         f.write(desktop_content)
 
-    print(f"Linux autostart configured!")
-    print(f"  Desktop entry: {desktop_file}")
-    print(f"  Wrapper script: {wrapper_path}")
-    print("\nThe app will now run automatically when you log in.")
+    print(f"Login autostart configured: {desktop_file}")
+
+    # 2. Setup systemd user service for wake from suspend
+    systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
+    systemd_user_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create the service file
+    service_file = systemd_user_dir / "inspo-quotes.service"
+    service_content = f"""[Unit]
+Description=Inspirational Quotes Display
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart={wrapper_path}
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+"""
+
+    with open(service_file, 'w') as f:
+        f.write(service_content)
+
+    print(f"Systemd service created: {service_file}")
+
+    # Enable the service
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    result = subprocess.run(
+        ["systemctl", "--user", "enable", "inspo-quotes.service"],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode == 0:
+        print("Systemd service enabled for wake-from-sleep!")
+    else:
+        print(f"Note: Could not enable systemd service: {result.stderr}")
+        print("The app will still run on login, but may not run on wake from sleep.")
+
+    print()
+    print("Linux setup complete!")
+    print("  - Will run on login (desktop autostart)")
+    print("  - Will run on wake from sleep (systemd service)")
 
 
 def setup_macos_autostart():
-    """Setup autostart for macOS using LaunchAgent."""
+    """Setup autostart for macOS - both login and wake from sleep."""
     launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
     launch_agents_dir.mkdir(parents=True, exist_ok=True)
 
-    plist_file = launch_agents_dir / "com.inspo.quotes.plist"
     project_path = get_project_path()
+    uv_path = get_uv_path()
 
     # Setup virtualenv first
     setup_virtualenv()
 
-    # Find uv path
-    uv_path = shutil.which("uv")
+    # Create a wrapper script that handles wake detection
+    wrapper_path = project_path / "run_inspo.sh"
+    wrapper_content = f"""#!/bin/bash
+# Wait a moment for the display to be ready after wake
+sleep 2
 
+# Run the app using uv
+cd "{project_path}"
+{uv_path} run python inspo_app.py
+"""
+
+    with open(wrapper_path, 'w') as f:
+        f.write(wrapper_content)
+    os.chmod(wrapper_path, os.stat(wrapper_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # Create a sleep watcher script that triggers on wake
+    watcher_path = project_path / "sleep_watcher.sh"
+    watcher_content = f"""#!/bin/bash
+# This script is called by sleepwatcher on wake from sleep
+{wrapper_path}
+"""
+
+    with open(watcher_path, 'w') as f:
+        f.write(watcher_content)
+    os.chmod(watcher_path, os.stat(watcher_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # 1. LaunchAgent for login
+    plist_file = launch_agents_dir / "com.inspo.quotes.plist"
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -133,16 +223,9 @@ def setup_macos_autostart():
     <string>com.inspo.quotes</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{uv_path}</string>
-        <string>run</string>
-        <string>python</string>
-        <string>inspo_app.py</string>
+        <string>{wrapper_path}</string>
     </array>
-    <key>WorkingDirectory</key>
-    <string>{project_path}</string>
     <key>RunAtLoad</key>
-    <true/>
-    <key>LaunchOnlyOnce</key>
     <true/>
     <key>StandardOutPath</key>
     <string>/tmp/inspo-quotes.log</string>
@@ -155,18 +238,85 @@ def setup_macos_autostart():
     with open(plist_file, 'w') as f:
         f.write(plist_content)
 
-    # Load the agent
+    # Load the login agent
+    os.system(f"launchctl unload {plist_file} 2>/dev/null")
     os.system(f"launchctl load {plist_file}")
 
-    print(f"macOS autostart configured!")
-    print(f"  LaunchAgent: {plist_file}")
-    print("\nThe app will now run automatically when you log in.")
+    print(f"Login autostart configured: {plist_file}")
+
+    # 2. Check for sleepwatcher or install instructions
+    sleepwatcher_installed = shutil.which("sleepwatcher") is not None
+
+    if sleepwatcher_installed:
+        # Create .wakeup file in home directory
+        wakeup_file = Path.home() / ".wakeup"
+        with open(wakeup_file, 'w') as f:
+            f.write(f"#!/bin/bash\n{wrapper_path}\n")
+        os.chmod(wakeup_file, os.stat(wakeup_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        # Create sleepwatcher LaunchAgent
+        sw_plist_file = launch_agents_dir / "com.inspo.sleepwatcher.plist"
+        sw_plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.inspo.sleepwatcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/sbin/sleepwatcher</string>
+        <string>-w</string>
+        <string>{wakeup_file}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+"""
+        with open(sw_plist_file, 'w') as f:
+            f.write(sw_plist_content)
+
+        os.system(f"launchctl unload {sw_plist_file} 2>/dev/null")
+        os.system(f"launchctl load {sw_plist_file}")
+
+        print(f"Wake-from-sleep configured with sleepwatcher: {sw_plist_file}")
+        print()
+        print("macOS setup complete!")
+        print("  - Will run on login")
+        print("  - Will run on wake from sleep (via sleepwatcher)")
+    else:
+        print()
+        print("macOS login autostart configured!")
+        print()
+        print("For WAKE FROM SLEEP support, install sleepwatcher:")
+        print("  brew install sleepwatcher")
+        print()
+        print("Then run this setup script again.")
+        print()
+        print("Currently configured:")
+        print("  - Will run on login")
+        print("  - Will NOT run on wake from sleep (sleepwatcher not installed)")
 
 
 def remove_linux_autostart():
     """Remove Linux autostart configuration."""
     desktop_file = Path.home() / ".config" / "autostart" / "inspo-quotes.desktop"
+    service_file = Path.home() / ".config" / "systemd" / "user" / "inspo-quotes.service"
     wrapper_path = get_project_path() / "run_inspo.sh"
+
+    # Disable and remove systemd service
+    subprocess.run(
+        ["systemctl", "--user", "disable", "inspo-quotes.service"],
+        capture_output=True
+    )
+
+    if service_file.exists():
+        service_file.unlink()
+        print(f"Removed: {service_file}")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
 
     if desktop_file.exists():
         desktop_file.unlink()
@@ -182,11 +332,32 @@ def remove_linux_autostart():
 def remove_macos_autostart():
     """Remove macOS autostart configuration."""
     plist_file = Path.home() / "Library" / "LaunchAgents" / "com.inspo.quotes.plist"
+    sw_plist_file = Path.home() / "Library" / "LaunchAgents" / "com.inspo.sleepwatcher.plist"
+    wakeup_file = Path.home() / ".wakeup"
+    wrapper_path = get_project_path() / "run_inspo.sh"
+    watcher_path = get_project_path() / "sleep_watcher.sh"
 
     if plist_file.exists():
-        os.system(f"launchctl unload {plist_file}")
+        os.system(f"launchctl unload {plist_file} 2>/dev/null")
         plist_file.unlink()
         print(f"Removed: {plist_file}")
+
+    if sw_plist_file.exists():
+        os.system(f"launchctl unload {sw_plist_file} 2>/dev/null")
+        sw_plist_file.unlink()
+        print(f"Removed: {sw_plist_file}")
+
+    if wakeup_file.exists():
+        wakeup_file.unlink()
+        print(f"Removed: {wakeup_file}")
+
+    if wrapper_path.exists():
+        wrapper_path.unlink()
+        print(f"Removed: {wrapper_path}")
+
+    if watcher_path.exists():
+        watcher_path.unlink()
+        print(f"Removed: {watcher_path}")
 
     print("macOS autostart removed.")
 
@@ -198,6 +369,10 @@ def main():
     print("=" * 60)
     print("Inspirational Quotes - Autostart Setup (using uv)")
     print("=" * 60)
+    print()
+    print("This will configure the app to run:")
+    print("  1. When you log in")
+    print("  2. When your laptop wakes from sleep")
     print()
 
     if len(sys.argv) > 1 and sys.argv[1] == "--remove":
