@@ -233,23 +233,45 @@ if [ -f "$HOME/.zshrc" ]; then
     source "$HOME/.zshrc" 2>/dev/null
 fi
 
-# Set up Tcl/Tk environment for uv's Python
-# Apple Silicon Homebrew location
-if [ -d "/opt/homebrew/opt/tcl-tk/lib" ]; then
-    echo "$(ts) [INFO] Found Homebrew Tcl/Tk (Apple Silicon)"
-    export TCL_LIBRARY="/opt/homebrew/opt/tcl-tk/lib/tcl8.6"
-    export TK_LIBRARY="/opt/homebrew/opt/tcl-tk/lib/tk8.6"
-    export DYLD_LIBRARY_PATH="/opt/homebrew/opt/tcl-tk/lib:$DYLD_LIBRARY_PATH"
-# Intel Homebrew location
-elif [ -d "/usr/local/opt/tcl-tk/lib" ]; then
-    echo "$(ts) [INFO] Found Homebrew Tcl/Tk (Intel)"
-    export TCL_LIBRARY="/usr/local/opt/tcl-tk/lib/tcl8.6"
-    export TK_LIBRARY="/usr/local/opt/tcl-tk/lib/tk8.6"
-    export DYLD_LIBRARY_PATH="/usr/local/opt/tcl-tk/lib:$DYLD_LIBRARY_PATH"
-fi
-
 # Add common paths to PATH
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+# Find Homebrew Tcl/Tk and set up environment
+# Look for Apple Silicon first, then Intel
+TCL_TK_BASE=""
+if [ -d "/opt/homebrew/opt/tcl-tk/lib" ]; then
+    TCL_TK_BASE="/opt/homebrew/opt/tcl-tk/lib"
+elif [ -d "/usr/local/opt/tcl-tk/lib" ]; then
+    TCL_TK_BASE="/usr/local/opt/tcl-tk/lib"
+fi
+
+if [ -n "$TCL_TK_BASE" ]; then
+    echo "$(ts) [INFO] Found Homebrew Tcl/Tk at $TCL_TK_BASE"
+
+    # Find the actual tcl version directory (tcl8.6, tcl9.0, etc)
+    TCL_DIR=$(ls -d "$TCL_TK_BASE"/tcl* 2>/dev/null | head -1)
+    TK_DIR=$(ls -d "$TCL_TK_BASE"/tk* 2>/dev/null | head -1)
+
+    if [ -n "$TCL_DIR" ] && [ -n "$TK_DIR" ]; then
+        echo "$(ts) [INFO] TCL_DIR=$TCL_DIR"
+        echo "$(ts) [INFO] TK_DIR=$TK_DIR"
+        export TCL_LIBRARY="$TCL_DIR"
+        export TK_LIBRARY="$TK_DIR"
+        export DYLD_LIBRARY_PATH="$TCL_TK_BASE:$DYLD_LIBRARY_PATH"
+    fi
+
+    # Also create symlinks for tcl8.6 if needed (uv Python expects 8.6)
+    if [ ! -d "$TCL_TK_BASE/tcl8.6" ] && [ -d "$TCL_DIR" ]; then
+        echo "$(ts) [INFO] Creating tcl8.6 symlink for compatibility..."
+        ln -sf "$TCL_DIR" "$TCL_TK_BASE/tcl8.6" 2>/dev/null || true
+    fi
+    if [ ! -d "$TCL_TK_BASE/tk8.6" ] && [ -d "$TK_DIR" ]; then
+        echo "$(ts) [INFO] Creating tk8.6 symlink for compatibility..."
+        ln -sf "$TK_DIR" "$TCL_TK_BASE/tk8.6" 2>/dev/null || true
+    fi
+else
+    echo "$(ts) [WARN] No Homebrew Tcl/Tk found"
+fi
 
 echo "$(ts) [INFO] TCL_LIBRARY=$TCL_LIBRARY"
 echo "$(ts) [INFO] TK_LIBRARY=$TK_LIBRARY"
