@@ -28,34 +28,39 @@ class InspirationApp:
         self.root = tk.Tk()
         self.root.title("Daily Inspiration")
 
-        # macOS-specific: activate the app to bring it to front
-        if platform.system() == "Darwin":
-            self._activate_macos_app()
-
-        # Get screen dimensions
+        # Get screen dimensions first
+        self.root.update_idletasks()
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
 
-        # Set window size explicitly before going fullscreen
-        self.root.geometry(f"{self.screen_width}x{self.screen_height}+0+0")
+        # Select random color scheme early (needed for background)
+        self.colors = random.choice(COLOR_SCHEMES)
 
-        # Make fullscreen and always on top
-        self.root.attributes('-fullscreen', True)
-        self.root.attributes('-topmost', True)
-
-        # macOS-specific: ensure window is above all others
+        # Configure for true fullscreen on macOS
         if platform.system() == "Darwin":
-            try:
-                self.root.attributes('-topmost', True)
-                self.root.call('::tk::unsupported::MacWindowStyle', 'style',
-                              self.root._w, 'plain', 'none')
-            except tk.TclError:
-                pass  # Ignore if this fails
+            # Remove window decorations
+            self.root.overrideredirect(True)
+            # Set geometry to cover entire screen
+            self.root.geometry(f"{self.screen_width}x{self.screen_height}+0+0")
+            # Set window level to be above everything
+            self.root.attributes('-topmost', True)
+            # Set background color
+            self.root.configure(bg=self.colors["bg"])
+            # Activate app
+            self._activate_macos_app()
+        else:
+            # Linux/other - use standard fullscreen
+            self.root.attributes('-fullscreen', True)
+            self.root.attributes('-topmost', True)
+            self.root.configure(bg=self.colors["bg"])
+
+        # Force window to update and show
+        self.root.update_idletasks()
+        self.root.update()
 
         # Force focus
         self.root.lift()
         self.root.focus_force()
-        self.root.update()
 
         # Disable window close button initially
         self.root.protocol("WM_DELETE_WINDOW", self.try_exit)
@@ -72,9 +77,6 @@ class InspirationApp:
         # Animation state
         self.animation_offset = 0
         self.pulse_phase = 0
-
-        # Select random color scheme
-        self.colors = random.choice(COLOR_SCHEMES)
 
         # Fetch and select a quote
         self.quotes = fetch_quotes_from_google_doc()
@@ -114,9 +116,13 @@ class InspirationApp:
             self.root,
             width=self.screen_width,
             height=self.screen_height,
-            highlightthickness=0
+            highlightthickness=0,
+            bg=self.colors["bg"]
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Force canvas to update
+        self.root.update_idletasks()
 
         # Draw initial background
         self.draw_background()
