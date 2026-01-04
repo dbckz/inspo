@@ -236,11 +236,27 @@ class QuoteView(NSView):
         timer_font = NSFont.boldSystemFontOfSize_(24)
 
         if self.can_exit:
-            timer_text = "Press ESC or Q to close and start your day inspired!"
+            timer_text = "Click anywhere or press any key to close"
             timer_color = author_color if self.author else fg_color
         else:
             timer_text = f"Take a moment to reflect... ({self.time_remaining}s)"
             timer_color = fg_color
+
+        # Draw a close button hint when can exit
+        if self.can_exit:
+            # Draw a subtle "X" button in top-right corner
+            close_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(1, 1, 1, 0.6)
+            close_color.setStroke()
+
+            x_size = 20
+            x_margin = 40
+            path = NSBezierPath.bezierPath()
+            path.moveToPoint_((width - x_margin - x_size, height - x_margin))
+            path.lineToPoint_((width - x_margin, height - x_margin - x_size))
+            path.moveToPoint_((width - x_margin, height - x_margin))
+            path.lineToPoint_((width - x_margin - x_size, height - x_margin - x_size))
+            path.setLineWidth_(3)
+            path.stroke()
 
         timer_attrs = {
             NSForegroundColorAttributeName: timer_color,
@@ -304,10 +320,17 @@ class QuoteView(NSView):
 
     def keyDown_(self, event):
         """Handle key events."""
-        chars = event.charactersIgnoringModifiers()
-        if chars and (chars.lower() == 'q' or event.keyCode() == 53):  # Q or ESC
-            if self.can_exit:
-                NSApp.terminate_(None)
+        if self.can_exit:
+            # Any key closes after timer
+            NSApp.terminate_(None)
+        else:
+            # Show reminder
+            self.setNeedsDisplay_(True)
+
+    def mouseDown_(self, event):
+        """Handle mouse clicks."""
+        if self.can_exit:
+            NSApp.terminate_(None)
 
 
 class InspirationAppMacOS:
@@ -337,10 +360,11 @@ class InspirationAppMacOS:
             False
         )
 
-        self.window.setLevel_(1000)  # Above everything
+        # Use a high but not extreme window level (floating window level + some)
+        # This keeps it above normal windows but allows system UI to work
+        self.window.setLevel_(8)  # NSModalPanelWindowLevel - above normal but not extreme
         self.window.setCollectionBehavior_(
-            NSWindowCollectionBehaviorFullScreenPrimary |
-            NSWindowCollectionBehaviorStationary
+            NSWindowCollectionBehaviorFullScreenPrimary
         )
 
         # Create custom view
