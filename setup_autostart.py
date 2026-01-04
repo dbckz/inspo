@@ -212,26 +212,32 @@ def setup_macos_autostart():
     # Setup virtualenv first
     setup_virtualenv()
 
-    # Create a wrapper script that sources shell profile for proper environment
+    # Create a wrapper script that uses Homebrew Python (has Tcl/Tk)
     wrapper_path = project_path / "run_inspo.sh"
     wrapper_content = f"""#!/bin/bash
 # Wait a moment for the display to be ready after wake
 sleep 2
 
-# Source shell profile to get the same environment as terminal
-# This ensures uv and Tcl/Tk paths are available
-if [ -f "$HOME/.zshrc" ]; then
-    source "$HOME/.zshrc" 2>/dev/null
-elif [ -f "$HOME/.bash_profile" ]; then
-    source "$HOME/.bash_profile" 2>/dev/null
-elif [ -f "$HOME/.bashrc" ]; then
-    source "$HOME/.bashrc" 2>/dev/null
-fi
-
 cd "{project_path}"
 
-# Run with uv (works because we sourced the shell profile)
-{uv_path} run python inspo_app.py
+# Try different Python options in order of preference:
+# 1. Homebrew Python (Apple Silicon) - has Tcl/Tk
+# 2. Homebrew Python (Intel) - has Tcl/Tk
+# 3. System Python - has Tcl/Tk but may need pip install
+
+if [ -x "/opt/homebrew/bin/python3" ]; then
+    # Apple Silicon Homebrew Python
+    /opt/homebrew/bin/python3 -c "import requests" 2>/dev/null || /opt/homebrew/bin/python3 -m pip install --quiet requests
+    exec /opt/homebrew/bin/python3 inspo_app.py
+elif [ -x "/usr/local/bin/python3" ]; then
+    # Intel Homebrew Python
+    /usr/local/bin/python3 -c "import requests" 2>/dev/null || /usr/local/bin/python3 -m pip install --quiet requests
+    exec /usr/local/bin/python3 inspo_app.py
+else
+    # Fallback to system Python
+    /usr/bin/python3 -c "import requests" 2>/dev/null || /usr/bin/python3 -m pip install --user --quiet requests
+    exec /usr/bin/python3 inspo_app.py
+fi
 """
 
     with open(wrapper_path, 'w') as f:
