@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "requests>=2.28.0",
+    "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

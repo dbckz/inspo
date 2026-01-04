@@ -4,15 +4,14 @@ Inspirational Quotes Display App
 
 A fullscreen app that displays inspirational quotes from a Google Doc
 with vibrant colors. Can only be exited after 30 seconds.
+
+Uses PyObjC for native macOS support (no Tcl/Tk dependency).
 """
 
 import random
-import tkinter as tk
-from tkinter import font as tkfont
 import math
 import sys
 import platform
-import subprocess
 
 from config import (
     COLOR_SCHEMES,
@@ -23,59 +22,347 @@ from config import (
 from quote_fetcher import fetch_quotes_from_google_doc
 
 
-class InspirationApp:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Daily Inspiration")
+def hex_to_rgba(hex_color: str, alpha: float = 1.0):
+    """Convert hex color to RGBA tuple (0-1 range)."""
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16) / 255.0
+    g = int(hex_color[2:4], 16) / 255.0
+    b = int(hex_color[4:6], 16) / 255.0
+    return (r, g, b, alpha)
 
-        # Select random color scheme early
-        self.colors = random.choice(COLOR_SCHEMES)
 
-        # Get screen dimensions
-        self.screen_width = self.root.winfo_screenwidth()
-        self.screen_height = self.root.winfo_screenheight()
+# Check platform and use appropriate implementation
+if platform.system() == "Darwin":
+    # macOS: Use PyObjC
+    try:
+        import objc
+        from Cocoa import (
+            NSApplication, NSApp, NSWindow, NSView,
+            NSBackingStoreBuffered, NSWindowStyleMaskBorderless,
+            NSWindowCollectionBehaviorFullScreenPrimary,
+            NSWindowCollectionBehaviorStationary,
+            NSScreen, NSColor, NSFont, NSFontWeightBold,
+            NSMutableParagraphStyle, NSTextAlignmentCenter,
+            NSMakeRect, NSAttributedString, NSTimer,
+            NSForegroundColorAttributeName, NSFontAttributeName,
+            NSParagraphStyleAttributeName, NSRunLoop,
+            NSDefaultRunLoopMode, NSApplicationActivationPolicyRegular,
+            NSBezierPath,
+        )
+        from Quartz import CGMainDisplayID
+        USE_PYOBJC = True
+    except ImportError:
+        USE_PYOBJC = False
+        print("PyObjC not available, falling back to tkinter")
+else:
+    USE_PYOBJC = False
 
-        # Set background color immediately
-        self.root.configure(bg=self.colors["bg"])
 
-        # Configure fullscreen - works on both macOS and Linux
-        self.root.attributes('-fullscreen', True)
-        self.root.attributes('-topmost', True)
+class QuoteView(NSView):
+    """Custom NSView for displaying the quote with animations."""
 
-        # Disable window close button
-        self.root.protocol("WM_DELETE_WINDOW", self.try_exit)
+    def initWithFrame_colors_quote_author_(self, frame, colors, quote, author):
+        self = objc.super(QuoteView, self).initWithFrame_(frame)
+        if self is None:
+            return None
 
-        # Block escape key initially
-        self.root.bind('<Escape>', self.try_exit)
-        self.root.bind('<q>', self.try_exit)
-        self.root.bind('<Q>', self.try_exit)
-
-        # Timer state
+        self.colors = colors
+        self.quote_text = quote
+        self.author = author
         self.time_remaining = EXIT_DELAY_SECONDS
         self.can_exit = False
-
-        # Animation state
         self.animation_offset = 0
-        self.pulse_phase = 0
+        self.pulse_phase = 0.0
+
+        # Floating decoration positions
+        self.decorations = []
+        for _ in range(15):
+            self.decorations.append({
+                'x': random.uniform(0, frame.size.width),
+                'y': random.uniform(0, frame.size.height),
+                'size': random.uniform(20, 100),
+                'speed_x': random.uniform(-0.5, 0.5),
+                'speed_y': random.uniform(-0.5, 0.5),
+            })
+
+        return self
+
+    def drawRect_(self, rect):
+        """Draw the view content."""
+        bounds = self.bounds()
+        width = bounds.size.width
+        height = bounds.size.height
+
+        # Draw gradient background
+        bg_color = hex_to_rgba(self.colors["bg"])
+        dark_color = self._darken_color(bg_color, 0.3)
+
+        for i in range(0, int(height), 4):
+            ratio = ((i + self.animation_offset) % int(height)) / height
+            r = bg_color[0] + (dark_color[0] - bg_color[0]) * ratio
+            g = bg_color[1] + (dark_color[1] - bg_color[1]) * ratio
+            b = bg_color[2] + (dark_color[2] - bg_color[2]) * ratio
+
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0)
+            color.setFill()
+            NSBezierPath.fillRect_(NSMakeRect(0, height - i - 4, width, 4))
+
+        # Draw corner accents
+        accent = hex_to_rgba(self.colors["accent"])
+        accent_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*accent)
+        accent_color.setFill()
+
+        corner_size = 150
+
+        # Top-left corner
+        path = NSBezierPath.bezierPath()
+        path.moveToPoint_((0, height))
+        path.lineToPoint_((corner_size, height))
+        path.lineToPoint_((0, height - corner_size))
+        path.closePath()
+        path.fill()
+
+        # Top-right corner
+        path = NSBezierPath.bezierPath()
+        path.moveToPoint_((width, height))
+        path.lineToPoint_((width - corner_size, height))
+        path.lineToPoint_((width, height - corner_size))
+        path.closePath()
+        path.fill()
+
+        # Bottom-left corner
+        path = NSBezierPath.bezierPath()
+        path.moveToPoint_((0, 0))
+        path.lineToPoint_((corner_size, 0))
+        path.lineToPoint_((0, corner_size))
+        path.closePath()
+        path.fill()
+
+        # Bottom-right corner
+        path = NSBezierPath.bezierPath()
+        path.moveToPoint_((width, 0))
+        path.lineToPoint_((width - corner_size, 0))
+        path.lineToPoint_((width, corner_size))
+        path.closePath()
+        path.fill()
+
+        # Draw floating circles
+        for decor in self.decorations:
+            circle_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                accent[0], accent[1], accent[2], 0.2
+            )
+            circle_color.setStroke()
+
+            circle = NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(
+                    decor['x'] - decor['size'],
+                    decor['y'] - decor['size'],
+                    decor['size'] * 2,
+                    decor['size'] * 2
+                )
+            )
+            circle.setLineWidth_(2)
+            circle.stroke()
+
+        # Draw quote text
+        fg = hex_to_rgba(self.colors["fg"])
+        fg_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*fg)
+
+        # Calculate font size based on quote length
+        base_size = QUOTE_FONT_SIZE
+        if len(self.quote_text) > 200:
+            base_size -= 16
+        elif len(self.quote_text) > 150:
+            base_size -= 12
+        elif len(self.quote_text) > 100:
+            base_size -= 8
+        elif len(self.quote_text) > 50:
+            base_size -= 4
+
+        # Apply pulse effect
+        pulse_scale = 1 + 0.02 * math.sin(self.pulse_phase)
+        font_size = int(base_size * pulse_scale)
+
+        quote_font = NSFont.boldSystemFontOfSize_(font_size)
+
+        paragraph = NSMutableParagraphStyle.alloc().init()
+        paragraph.setAlignment_(NSTextAlignmentCenter)
+
+        attrs = {
+            NSForegroundColorAttributeName: fg_color,
+            NSFontAttributeName: quote_font,
+            NSParagraphStyleAttributeName: paragraph,
+        }
+
+        quote_str = NSAttributedString.alloc().initWithString_attributes_(
+            f'"{self.quote_text}"', attrs
+        )
+
+        # Calculate text position
+        text_size = quote_str.size()
+        quote_rect = NSMakeRect(
+            100,
+            height / 2 - text_size.height / 2 + 50,
+            width - 200,
+            text_size.height + 100
+        )
+        quote_str.drawInRect_(quote_rect)
+
+        # Draw author
+        if self.author:
+            author_font = NSFont.systemFontOfSize_(AUTHOR_FONT_SIZE)
+            author_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*accent)
+
+            author_attrs = {
+                NSForegroundColorAttributeName: author_color,
+                NSFontAttributeName: author_font,
+                NSParagraphStyleAttributeName: paragraph,
+            }
+
+            author_str = NSAttributedString.alloc().initWithString_attributes_(
+                f"— {self.author}", author_attrs
+            )
+
+            author_size = author_str.size()
+            author_rect = NSMakeRect(
+                100,
+                height / 2 - author_size.height - 100,
+                width - 200,
+                author_size.height + 20
+            )
+            author_str.drawInRect_(author_rect)
+
+        # Draw timer text
+        timer_font = NSFont.boldSystemFontOfSize_(24)
+
+        if self.can_exit:
+            timer_text = "Press ESC or Q to close and start your day inspired!"
+            timer_color = author_color if self.author else fg_color
+        else:
+            timer_text = f"Take a moment to reflect... ({self.time_remaining}s)"
+            timer_color = fg_color
+
+        timer_attrs = {
+            NSForegroundColorAttributeName: timer_color,
+            NSFontAttributeName: timer_font,
+            NSParagraphStyleAttributeName: paragraph,
+        }
+
+        timer_str = NSAttributedString.alloc().initWithString_attributes_(
+            timer_text, timer_attrs
+        )
+
+        timer_size = timer_str.size()
+        timer_rect = NSMakeRect(
+            100,
+            60,
+            width - 200,
+            timer_size.height + 20
+        )
+        timer_str.drawInRect_(timer_rect)
+
+    def _darken_color(self, color, amount):
+        """Darken an RGBA color tuple."""
+        return (
+            color[0] * (1 - amount),
+            color[1] * (1 - amount),
+            color[2] * (1 - amount),
+            color[3]
+        )
+
+    def animate_(self, timer):
+        """Animation timer callback."""
+        self.animation_offset = (self.animation_offset + 2) % int(self.bounds().size.height)
+        self.pulse_phase += 0.1
+
+        # Update decorations
+        width = self.bounds().size.width
+        height = self.bounds().size.height
+        for decor in self.decorations:
+            decor['x'] += decor['speed_x']
+            decor['y'] += decor['speed_y']
+
+            if decor['x'] <= 0 or decor['x'] >= width:
+                decor['speed_x'] *= -1
+            if decor['y'] <= 0 or decor['y'] >= height:
+                decor['speed_y'] *= -1
+
+        self.setNeedsDisplay_(True)
+
+    def updateTimer_(self, timer):
+        """Timer countdown callback."""
+        if self.time_remaining > 0:
+            self.time_remaining -= 1
+            self.setNeedsDisplay_(True)
+        else:
+            self.can_exit = True
+            self.setNeedsDisplay_(True)
+            timer.invalidate()
+
+    def acceptsFirstResponder(self):
+        return True
+
+    def keyDown_(self, event):
+        """Handle key events."""
+        chars = event.charactersIgnoringModifiers()
+        if chars and (chars.lower() == 'q' or event.keyCode() == 53):  # Q or ESC
+            if self.can_exit:
+                NSApp.terminate_(None)
+
+
+class InspirationAppMacOS:
+    """Native macOS implementation using PyObjC."""
+
+    def __init__(self):
+        self.app = NSApplication.sharedApplication()
+        self.app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+
+        # Select random color scheme
+        self.colors = random.choice(COLOR_SCHEMES)
 
         # Fetch and select a quote
-        self.quotes = fetch_quotes_from_google_doc()
-        self.current_quote = random.choice(self.quotes)
+        quotes = fetch_quotes_from_google_doc()
+        current_quote = random.choice(quotes)
+        self.quote_text, self.author = self.parse_quote(current_quote)
 
-        # Parse quote and author
-        self.quote_text, self.author = self.parse_quote(self.current_quote)
+        # Get screen size
+        screen = NSScreen.mainScreen()
+        frame = screen.frame()
 
-        # Setup UI
-        self.setup_ui()
+        # Create fullscreen window
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False
+        )
 
-        # Start animations and timer
-        self.animate_background()
-        self.update_timer()
-        self.pulse_quote()
+        self.window.setLevel_(1000)  # Above everything
+        self.window.setCollectionBehavior_(
+            NSWindowCollectionBehaviorFullScreenPrimary |
+            NSWindowCollectionBehaviorStationary
+        )
+
+        # Create custom view
+        self.view = QuoteView.alloc().initWithFrame_colors_quote_author_(
+            frame, self.colors, self.quote_text, self.author
+        )
+
+        self.window.setContentView_(self.view)
+        self.window.makeFirstResponder_(self.view)
+
+        # Start animation timer (20fps)
+        self.anim_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.05, self.view, objc.selector(QuoteView.animate_, signature=b'v@:@'), None, True
+        )
+
+        # Start countdown timer (1 second)
+        self.countdown_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self.view, objc.selector(QuoteView.updateTimer_, signature=b'v@:@'), None, True
+        )
 
     def parse_quote(self, quote: str) -> tuple:
         """Parse quote text and author from a quote string."""
-        # Common patterns: "Quote - Author", "Quote — Author", '"Quote" - Author'
         separators = [' - ', ' — ', ' – ', ' ~ ']
 
         for sep in separators:
@@ -86,331 +373,127 @@ class InspirationApp:
                     author = parts[1].strip()
                     return quote_text, author
 
-        # No author found
         return quote.strip().strip('"').strip("'"), ""
-
-    def setup_ui(self):
-        """Create the UI elements."""
-        # Main canvas for animated background
-        self.canvas = tk.Canvas(
-            self.root,
-            width=self.screen_width,
-            height=self.screen_height,
-            highlightthickness=0,
-            bg=self.colors["bg"]
-        )
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        # Fill canvas with background color as a rectangle (more reliable)
-        self.canvas.create_rectangle(
-            0, 0, self.screen_width, self.screen_height,
-            fill=self.colors["bg"], outline=""
-        )
-
-        # Draw gradient background
-        self.draw_background()
-
-        # Create fonts
-        self.quote_font = tkfont.Font(
-            family="Helvetica",
-            size=self.calculate_font_size(),
-            weight="bold"
-        )
-        self.author_font = tkfont.Font(
-            family="Helvetica",
-            size=AUTHOR_FONT_SIZE,
-            slant="italic"
-        )
-        self.timer_font = tkfont.Font(
-            family="Helvetica",
-            size=24,
-            weight="bold"
-        )
-        self.hint_font = tkfont.Font(
-            family="Helvetica",
-            size=16
-        )
-
-        # Quote text (centered)
-        wrapped_quote = self.wrap_text(self.quote_text, 50)
-        self.quote_label = self.canvas.create_text(
-            self.screen_width // 2,
-            self.screen_height // 2 - 50,
-            text=f'"{wrapped_quote}"',
-            font=self.quote_font,
-            fill=self.colors["fg"],
-            justify=tk.CENTER,
-            width=self.screen_width - 200
-        )
-
-        # Author text
-        if self.author:
-            self.author_label = self.canvas.create_text(
-                self.screen_width // 2,
-                self.screen_height // 2 + 150,
-                text=f"— {self.author}",
-                font=self.author_font,
-                fill=self.colors["accent"],
-                justify=tk.CENTER
-            )
-
-        # Timer display at bottom
-        self.timer_label = self.canvas.create_text(
-            self.screen_width // 2,
-            self.screen_height - 80,
-            text=f"Take a moment to reflect... ({self.time_remaining}s)",
-            font=self.timer_font,
-            fill=self.colors["fg"],
-            justify=tk.CENTER
-        )
-
-        # Decorative elements
-        self.draw_decorations()
-
-    def calculate_font_size(self) -> int:
-        """Calculate appropriate font size based on quote length."""
-        length = len(self.quote_text)
-        if length > 200:
-            return QUOTE_FONT_SIZE - 16
-        elif length > 150:
-            return QUOTE_FONT_SIZE - 12
-        elif length > 100:
-            return QUOTE_FONT_SIZE - 8
-        elif length > 50:
-            return QUOTE_FONT_SIZE - 4
-        return QUOTE_FONT_SIZE
-
-    def wrap_text(self, text: str, max_chars: int) -> str:
-        """Wrap text to specified character width."""
-        words = text.split()
-        lines = []
-        current_line = []
-        current_length = 0
-
-        for word in words:
-            if current_length + len(word) + 1 <= max_chars:
-                current_line.append(word)
-                current_length += len(word) + 1
-            else:
-                if current_line:
-                    lines.append(' '.join(current_line))
-                current_line = [word]
-                current_length = len(word)
-
-        if current_line:
-            lines.append(' '.join(current_line))
-
-        return '\n'.join(lines)
-
-    def draw_background(self):
-        """Draw the animated gradient background."""
-        self.canvas.delete("bg")
-
-        # Create gradient effect with animated offset
-        for i in range(0, self.screen_height, 4):
-            ratio = (i + self.animation_offset) % self.screen_height / self.screen_height
-            color = self.interpolate_color(
-                self.colors["bg"],
-                self.darken_color(self.colors["bg"], 0.3),
-                ratio
-            )
-            self.canvas.create_line(
-                0, i, self.screen_width, i,
-                fill=color, width=4, tags="bg"
-            )
-
-        self.canvas.tag_lower("bg")
-
-    def draw_decorations(self):
-        """Draw decorative geometric shapes."""
-        self.decorations = []
-
-        # Draw floating circles
-        for _ in range(15):
-            x = random.randint(0, self.screen_width)
-            y = random.randint(0, self.screen_height)
-            size = random.randint(20, 100)
-            alpha_color = self.adjust_alpha(self.colors["accent"], 0.2)
-
-            circle = self.canvas.create_oval(
-                x - size, y - size, x + size, y + size,
-                outline=alpha_color, width=2, tags="decor"
-            )
-            self.decorations.append({
-                'id': circle,
-                'x': x,
-                'y': y,
-                'size': size,
-                'speed_x': random.uniform(-0.5, 0.5),
-                'speed_y': random.uniform(-0.5, 0.5)
-            })
-
-        # Draw corner accents
-        corner_size = 150
-        accent_color = self.colors["accent"]
-
-        # Top-left
-        self.canvas.create_polygon(
-            0, 0, corner_size, 0, 0, corner_size,
-            fill=accent_color, outline="", tags="decor"
-        )
-
-        # Top-right
-        self.canvas.create_polygon(
-            self.screen_width, 0,
-            self.screen_width - corner_size, 0,
-            self.screen_width, corner_size,
-            fill=accent_color, outline="", tags="decor"
-        )
-
-        # Bottom-left
-        self.canvas.create_polygon(
-            0, self.screen_height,
-            corner_size, self.screen_height,
-            0, self.screen_height - corner_size,
-            fill=accent_color, outline="", tags="decor"
-        )
-
-        # Bottom-right
-        self.canvas.create_polygon(
-            self.screen_width, self.screen_height,
-            self.screen_width - corner_size, self.screen_height,
-            self.screen_width, self.screen_height - corner_size,
-            fill=accent_color, outline="", tags="decor"
-        )
-
-    def animate_background(self):
-        """Animate the background gradient."""
-        self.animation_offset = (self.animation_offset + 2) % self.screen_height
-        self.draw_background()
-
-        # Animate floating decorations
-        for decor in self.decorations:
-            decor['x'] += decor['speed_x']
-            decor['y'] += decor['speed_y']
-
-            # Bounce off edges
-            if decor['x'] <= 0 or decor['x'] >= self.screen_width:
-                decor['speed_x'] *= -1
-            if decor['y'] <= 0 or decor['y'] >= self.screen_height:
-                decor['speed_y'] *= -1
-
-            self.canvas.coords(
-                decor['id'],
-                decor['x'] - decor['size'],
-                decor['y'] - decor['size'],
-                decor['x'] + decor['size'],
-                decor['y'] + decor['size']
-            )
-
-        self.root.after(50, self.animate_background)
-
-    def pulse_quote(self):
-        """Create a subtle pulsing effect on the quote."""
-        self.pulse_phase += 0.1
-        scale = 1 + 0.02 * math.sin(self.pulse_phase)
-
-        # Update font size for pulse effect
-        new_size = int(self.calculate_font_size() * scale)
-        self.quote_font.configure(size=new_size)
-
-        self.root.after(100, self.pulse_quote)
-
-    def update_timer(self):
-        """Update the countdown timer."""
-        if self.time_remaining > 0:
-            self.time_remaining -= 1
-            self.canvas.itemconfig(
-                self.timer_label,
-                text=f"Take a moment to reflect... ({self.time_remaining}s)"
-            )
-            self.root.after(1000, self.update_timer)
-        else:
-            self.can_exit = True
-            self.canvas.itemconfig(
-                self.timer_label,
-                text="Press ESC or Q to close and start your day inspired!"
-            )
-            # Add a subtle glow effect to indicate ready
-            self.canvas.itemconfig(self.timer_label, fill=self.colors["accent"])
-
-    def try_exit(self, event=None):
-        """Attempt to exit the application."""
-        if self.can_exit:
-            self.root.destroy()
-            sys.exit(0)
-        else:
-            # Show a gentle reminder
-            self.canvas.itemconfig(
-                self.timer_label,
-                text=f"Take a breath... ({self.time_remaining}s remaining)"
-            )
-
-    def interpolate_color(self, color1: str, color2: str, ratio: float) -> str:
-        """Interpolate between two hex colors."""
-        r1, g1, b1 = self.hex_to_rgb(color1)
-        r2, g2, b2 = self.hex_to_rgb(color2)
-
-        r = int(r1 + (r2 - r1) * ratio)
-        g = int(g1 + (g2 - g1) * ratio)
-        b = int(b1 + (b2 - b1) * ratio)
-
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def darken_color(self, color: str, amount: float) -> str:
-        """Darken a hex color by a given amount."""
-        r, g, b = self.hex_to_rgb(color)
-        r = int(r * (1 - amount))
-        g = int(g * (1 - amount))
-        b = int(b * (1 - amount))
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def adjust_alpha(self, color: str, alpha: float) -> str:
-        """Simulate alpha by lightening/darkening toward background."""
-        bg_r, bg_g, bg_b = self.hex_to_rgb(self.colors["bg"])
-        fg_r, fg_g, fg_b = self.hex_to_rgb(color)
-
-        r = int(bg_r + (fg_r - bg_r) * alpha)
-        g = int(bg_g + (fg_g - bg_g) * alpha)
-        b = int(bg_b + (fg_b - bg_b) * alpha)
-
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def hex_to_rgb(self, color: str) -> tuple:
-        """Convert hex color to RGB tuple."""
-        color = color.lstrip('#')
-        return tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
-
-    def _activate_macos_app(self):
-        """Activate the app on macOS to bring it to the foreground."""
-        try:
-            # Use AppleScript to activate Python and bring window to front
-            script = '''
-            tell application "System Events"
-                set frontmost of every process whose unix id is {} to true
-            end tell
-            '''.format(subprocess.getoutput("echo $$"))
-            subprocess.run(["osascript", "-e", script], capture_output=True)
-        except Exception:
-            pass  # Ignore errors, window will still show
-
-        # Also try to activate via Python process name
-        try:
-            script = '''
-            tell application "System Events"
-                set processList to every process whose name contains "Python"
-                repeat with proc in processList
-                    set frontmost of proc to true
-                end repeat
-            end tell
-            '''
-            subprocess.run(["osascript", "-e", script], capture_output=True)
-        except Exception:
-            pass
 
     def run(self):
         """Run the application."""
-        self.root.mainloop()
+        self.window.makeKeyAndOrderFront_(None)
+        self.app.activateIgnoringOtherApps_(True)
+        self.app.run()
+
+
+# Fallback to tkinter for non-macOS or if PyObjC unavailable
+if not USE_PYOBJC:
+    import tkinter as tk
+    from tkinter import font as tkfont
+
+    class InspirationAppTkinter:
+        """Tkinter fallback implementation."""
+
+        def __init__(self):
+            self.root = tk.Tk()
+            self.root.title("Daily Inspiration")
+
+            self.colors = random.choice(COLOR_SCHEMES)
+            self.screen_width = self.root.winfo_screenwidth()
+            self.screen_height = self.root.winfo_screenheight()
+
+            self.root.configure(bg=self.colors["bg"])
+            self.root.attributes('-fullscreen', True)
+            self.root.attributes('-topmost', True)
+
+            self.root.protocol("WM_DELETE_WINDOW", self.try_exit)
+            self.root.bind('<Escape>', self.try_exit)
+            self.root.bind('<q>', self.try_exit)
+            self.root.bind('<Q>', self.try_exit)
+
+            self.time_remaining = EXIT_DELAY_SECONDS
+            self.can_exit = False
+            self.animation_offset = 0
+            self.pulse_phase = 0
+
+            self.quotes = fetch_quotes_from_google_doc()
+            self.current_quote = random.choice(self.quotes)
+            self.quote_text, self.author = self.parse_quote(self.current_quote)
+
+            self.setup_ui()
+            self.animate_background()
+            self.update_timer()
+            self.pulse_quote()
+
+        def parse_quote(self, quote: str) -> tuple:
+            separators = [' - ', ' — ', ' – ', ' ~ ']
+            for sep in separators:
+                if sep in quote:
+                    parts = quote.rsplit(sep, 1)
+                    if len(parts) == 2:
+                        return parts[0].strip().strip('"').strip("'"), parts[1].strip()
+            return quote.strip().strip('"').strip("'"), ""
+
+        def setup_ui(self):
+            self.canvas = tk.Canvas(
+                self.root, width=self.screen_width, height=self.screen_height,
+                highlightthickness=0, bg=self.colors["bg"]
+            )
+            self.canvas.pack(fill=tk.BOTH, expand=True)
+
+            self.quote_font = tkfont.Font(family="Helvetica", size=QUOTE_FONT_SIZE, weight="bold")
+            self.author_font = tkfont.Font(family="Helvetica", size=AUTHOR_FONT_SIZE, slant="italic")
+            self.timer_font = tkfont.Font(family="Helvetica", size=24, weight="bold")
+
+            self.quote_label = self.canvas.create_text(
+                self.screen_width // 2, self.screen_height // 2 - 50,
+                text=f'"{self.quote_text}"', font=self.quote_font,
+                fill=self.colors["fg"], justify=tk.CENTER, width=self.screen_width - 200
+            )
+
+            if self.author:
+                self.author_label = self.canvas.create_text(
+                    self.screen_width // 2, self.screen_height // 2 + 150,
+                    text=f"— {self.author}", font=self.author_font,
+                    fill=self.colors["accent"], justify=tk.CENTER
+                )
+
+            self.timer_label = self.canvas.create_text(
+                self.screen_width // 2, self.screen_height - 80,
+                text=f"Take a moment to reflect... ({self.time_remaining}s)",
+                font=self.timer_font, fill=self.colors["fg"], justify=tk.CENTER
+            )
+
+        def animate_background(self):
+            self.animation_offset = (self.animation_offset + 2) % self.screen_height
+            self.root.after(50, self.animate_background)
+
+        def pulse_quote(self):
+            self.pulse_phase += 0.1
+            scale = 1 + 0.02 * math.sin(self.pulse_phase)
+            new_size = int(QUOTE_FONT_SIZE * scale)
+            self.quote_font.configure(size=new_size)
+            self.root.after(100, self.pulse_quote)
+
+        def update_timer(self):
+            if self.time_remaining > 0:
+                self.time_remaining -= 1
+                self.canvas.itemconfig(
+                    self.timer_label,
+                    text=f"Take a moment to reflect... ({self.time_remaining}s)"
+                )
+                self.root.after(1000, self.update_timer)
+            else:
+                self.can_exit = True
+                self.canvas.itemconfig(
+                    self.timer_label,
+                    text="Press ESC or Q to close and start your day inspired!"
+                )
+                self.canvas.itemconfig(self.timer_label, fill=self.colors["accent"])
+
+        def try_exit(self, event=None):
+            if self.can_exit:
+                self.root.destroy()
+                sys.exit(0)
+
+        def run(self):
+            self.root.mainloop()
 
 
 def main():
@@ -419,7 +502,13 @@ def main():
     print("The display will remain for 30 seconds before you can close it.")
     print("Use this time to reflect on the quote and set your intention for the day!")
 
-    app = InspirationApp()
+    if USE_PYOBJC:
+        print("Using native macOS (PyObjC) implementation...")
+        app = InspirationAppMacOS()
+    else:
+        print("Using tkinter implementation...")
+        app = InspirationAppTkinter()
+
     app.run()
 
 
