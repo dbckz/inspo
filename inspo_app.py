@@ -12,6 +12,7 @@ import random
 import math
 import sys
 import platform
+import argparse
 
 from config import (
     COLOR_SCHEMES,
@@ -20,6 +21,9 @@ from config import (
     AUTHOR_FONT_SIZE,
 )
 from quote_fetcher import fetch_quotes_from_google_doc
+
+# Global override for delay (set via command line)
+_delay_override = None
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 1.0):
@@ -69,7 +73,7 @@ class QuoteView(NSView):
         self.colors = colors
         self.quote_text = quote
         self.author = author
-        self.time_remaining = EXIT_DELAY_SECONDS
+        self.time_remaining = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
         self.can_exit = False
         self.animation_offset = 0
         self.pulse_phase = 0.0
@@ -431,7 +435,7 @@ if not USE_PYOBJC:
             self.root.bind('<q>', self.try_exit)
             self.root.bind('<Q>', self.try_exit)
 
-            self.time_remaining = EXIT_DELAY_SECONDS
+            self.time_remaining = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
             self.can_exit = False
             self.animation_offset = 0
             self.pulse_phase = 0
@@ -522,8 +526,32 @@ if not USE_PYOBJC:
 
 def main():
     """Main entry point."""
+    global _delay_override
+
+    parser = argparse.ArgumentParser(description="Inspirational Quotes Display")
+    parser.add_argument(
+        "--delay", "-d",
+        type=int,
+        default=None,
+        help=f"Override exit delay in seconds (default: {EXIT_DELAY_SECONDS})"
+    )
+    parser.add_argument(
+        "--test", "-t",
+        action="store_true",
+        help="Test mode with 5 second delay"
+    )
+    args = parser.parse_args()
+
+    # Set delay override
+    if args.test:
+        _delay_override = 5
+    elif args.delay is not None:
+        _delay_override = args.delay
+
+    delay = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
+
     print("Starting Inspirational Quotes Display...")
-    print("The display will remain for 30 seconds before you can close it.")
+    print(f"The display will remain for {delay} seconds before you can close it.")
     print("Use this time to reflect on the quote and set your intention for the day!")
 
     if USE_PYOBJC:
