@@ -236,10 +236,11 @@ fi
 # Add common paths to PATH
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-echo "$(ts) [INFO] Running uv run python inspo_app.py..."
+echo "$(ts) [INFO] Running uv run python inspo_app.py $@..."
 
 # Run with uv - uses PyObjC for native macOS display (no Tcl/Tk needed)
-exec {uv_path} run python inspo_app.py 2>&1
+# Pass through any arguments (e.g. --eye-break)
+exec {uv_path} run python inspo_app.py "$@" 2>&1
 """
 
     with open(wrapper_path, 'w') as f:

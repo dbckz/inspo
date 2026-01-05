@@ -20,12 +20,8 @@ fi
 # Add common paths to PATH
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-# Check for --eye-break argument
-if [ "$1" = "--eye-break" ]; then
-    echo "$(ts) [INFO] Running uv run python inspo_app.py --eye-break..."
-    exec /Users/davebuckley/.cargo/bin/uv run python inspo_app.py --eye-break 2>&1
-else
-    echo "$(ts) [INFO] Running uv run python inspo_app.py..."
-    # Run with uv - uses PyObjC for native macOS display (no Tcl/Tk needed)
-    exec /Users/davebuckley/.cargo/bin/uv run python inspo_app.py 2>&1
-fi
+echo "$(ts) [INFO] Running uv run python inspo_app.py $@..."
+
+# Run with uv - uses PyObjC for native macOS display (no Tcl/Tk needed)
+# Pass through any arguments (e.g. --eye-break)
+exec /Users/davebuckley/.local/bin/uv run python inspo_app.py "$@" 2>&1
