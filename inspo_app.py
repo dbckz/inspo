@@ -342,6 +342,16 @@ class QuoteView(NSView):
             NSApp.terminate_(None)
 
 
+class KeyableWindow(NSWindow):
+    """Custom NSWindow subclass that can become key window even when borderless."""
+
+    def canBecomeKeyWindow(self):
+        return True
+
+    def canBecomeMainWindow(self):
+        return True
+
+
 class InspirationAppMacOS:
     """Native macOS implementation using PyObjC."""
 
@@ -361,8 +371,8 @@ class InspirationAppMacOS:
         screen = NSScreen.mainScreen()
         frame = screen.frame()
 
-        # Create fullscreen window
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        # Create fullscreen window (use custom class that accepts keyboard input)
+        self.window = KeyableWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame,
             NSWindowStyleMaskBorderless,
             NSBackingStoreBuffered,
