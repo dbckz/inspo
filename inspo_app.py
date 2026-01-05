@@ -74,9 +74,9 @@ class QuoteView(NSView):
         self.quote_text = quote
         self.author = author
         self.time_remaining = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
+        self.initial_delay = self.time_remaining  # Store for animation sync
         self.can_exit = False
         self.animation_offset = 0
-        self.pulse_phase = 0.0
 
         # Floating decoration positions
         self.decorations = []
@@ -101,11 +101,20 @@ class QuoteView(NSView):
         bg_color = hex_to_rgba(self.colors["bg"])
         dark_color = self._darken_color(bg_color, 0.3)
 
+        # Draw gradient with animated sweep line
         for i in range(0, int(height), 4):
-            ratio = ((i + self.animation_offset) % int(height)) / height
-            r = bg_color[0] + (dark_color[0] - bg_color[0]) * ratio
-            g = bg_color[1] + (dark_color[1] - bg_color[1]) * ratio
-            b = bg_color[2] + (dark_color[2] - bg_color[2]) * ratio
+            # Calculate if this line is above or below the sweep position
+            sweep_y = self.animation_offset
+            if i < sweep_y:
+                # Above sweep - use lighter color (already "swept")
+                ratio = 0.3
+            else:
+                # Below sweep - use darker gradient
+                ratio = 0.7 + 0.3 * (i - sweep_y) / max(height - sweep_y, 1)
+
+            r = bg_color[0] * (1 - ratio * 0.3)
+            g = bg_color[1] * (1 - ratio * 0.3)
+            b = bg_color[2] * (1 - ratio * 0.3)
 
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0)
             color.setFill()
@@ -183,11 +192,7 @@ class QuoteView(NSView):
         elif len(self.quote_text) > 50:
             base_size -= 4
 
-        # Apply pulse effect
-        pulse_scale = 1 + 0.02 * math.sin(self.pulse_phase)
-        font_size = int(base_size * pulse_scale)
-
-        quote_font = NSFont.boldSystemFontOfSize_(font_size)
+        quote_font = NSFont.boldSystemFontOfSize_(base_size)
 
         paragraph = NSMutableParagraphStyle.alloc().init()
         paragraph.setAlignment_(NSTextAlignmentCenter)
@@ -292,8 +297,17 @@ class QuoteView(NSView):
 
     def animate_(self, timer):
         """Animation timer callback."""
-        self.animation_offset = (self.animation_offset + 2) % int(self.bounds().size.height)
-        self.pulse_phase += 0.1
+        height = int(self.bounds().size.height)
+
+        # Calculate animation speed so the line reaches top exactly when timer ends
+        # Animation runs at 20fps (0.05s interval), so total frames = initial_delay * 20
+        total_frames = self.initial_delay * 20
+        if total_frames > 0:
+            increment = height / total_frames
+        else:
+            increment = 2  # Fallback
+
+        self.animation_offset = min(self.animation_offset + increment, height)
 
         # Update decorations
         width = self.bounds().size.width
