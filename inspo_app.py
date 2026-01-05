@@ -5,6 +5,8 @@ Inspirational Quotes Display App
 A fullscreen app that displays inspirational quotes from a Google Doc
 with vibrant colors. Can only be exited after 30 seconds.
 
+Also includes 20-20-20 eye break mode for eye health reminders.
+
 Uses PyObjC for native macOS support (no Tcl/Tk dependency).
 """
 
@@ -13,6 +15,9 @@ import math
 import sys
 import platform
 import argparse
+import os
+import tempfile
+import time
 
 from config import (
     COLOR_SCHEMES,
@@ -24,6 +29,129 @@ from quote_fetcher import fetch_quotes_from_google_doc
 
 # Global override for delay (set via command line)
 _delay_override = None
+
+# Lock file for coordination between quote and eye break displays
+LOCK_FILE = os.path.join(tempfile.gettempdir(), "inspo_display.lock")
+
+
+def acquire_lock(mode: str) -> bool:
+    """Try to acquire the display lock. Returns True if successful."""
+    try:
+        # Check if lock file exists and is recent (within 2 minutes)
+        if os.path.exists(LOCK_FILE):
+            mtime = os.path.getmtime(LOCK_FILE)
+            if time.time() - mtime < 120:  # Lock is still valid
+                return False
+        # Create lock file
+        with open(LOCK_FILE, 'w') as f:
+            f.write(f"{mode}:{os.getpid()}")
+        return True
+    except Exception:
+        return False
+
+
+def release_lock():
+    """Release the display lock."""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except Exception:
+        pass
+
+
+def is_camera_in_use() -> bool:
+    """Check if the camera is currently in use on macOS."""
+    import subprocess
+    try:
+        # Check for processes using the camera via lsof
+        # AppleCamera and VDC Assistant are used when camera is active
+        result = subprocess.run(
+            ["lsof", "/dev/video0"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+
+        # Also check via system profiler for camera usage
+        # This checks if any app has the camera open
+        result = subprocess.run(
+            ["bash", "-c", "lsof | grep -i 'AppleCamera\\|VDCAssistant\\|AppleH13Camera' | head -1"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.stdout.strip():
+            return True
+
+    except Exception:
+        pass
+    return False
+
+
+def get_meeting_window_titles() -> list:
+    """Get window titles that might indicate a video call is in progress."""
+    import subprocess
+    try:
+        # Use AppleScript to get all window titles
+        script = '''
+        tell application "System Events"
+            set windowTitles to {}
+            repeat with proc in (every process whose background only is false)
+                try
+                    repeat with win in (every window of proc)
+                        set end of windowTitles to (name of win as text)
+                    end repeat
+                end try
+            end repeat
+            return windowTitles
+        end tell
+        '''
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            # Parse the AppleScript list output
+            titles = result.stdout.strip()
+            if titles:
+                return [t.strip() for t in titles.split(",")]
+    except Exception:
+        pass
+    return []
+
+
+def is_in_video_call() -> tuple[bool, str]:
+    """
+    Check if user is currently in a video call.
+    Returns (is_in_call, reason) tuple.
+    """
+    # Check 1: Camera in use
+    if is_camera_in_use():
+        return True, "camera is in use"
+
+    # Check 2: Meeting window titles
+    meeting_keywords = [
+        # Google Meet (note: uses en-dash – not hyphen -)
+        "meet.google.com", "Meet –", "Meet -", "Google Meet",
+        # Zoom
+        "Zoom Meeting", "zoom.us", "Zoom Webinar",
+        # Microsoft Teams
+        "Microsoft Teams", "Teams |", "| Teams",
+        # Generic
+        "Screen Share", "Sharing your screen",
+    ]
+
+    window_titles = get_meeting_window_titles()
+    for title in window_titles:
+        for keyword in meeting_keywords:
+            if keyword.lower() in title.lower():
+                return True, f"meeting window detected: '{title[:50]}'"
+
+    return False, ""
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 1.0):
@@ -51,7 +179,7 @@ if platform.system() == "Darwin":
             NSForegroundColorAttributeName, NSFontAttributeName,
             NSParagraphStyleAttributeName, NSRunLoop,
             NSDefaultRunLoopMode, NSApplicationActivationPolicyRegular,
-            NSBezierPath,
+            NSBezierPath, NSSound,
         )
         from Quartz import CGMainDisplayID
         USE_PYOBJC = True
@@ -366,6 +494,309 @@ class KeyableWindow(NSWindow):
         return True
 
 
+# Classic BSOD color scheme for eye break
+BSOD_COLORS = {
+    "bg": "#0000AA",      # Classic DOS/Windows blue
+    "fg": "#FFFFFF",       # White text
+}
+
+
+class EyeBreakView(NSView):
+    """Custom NSView for displaying the 20-20-20 eye break screen."""
+
+    def initWithFrame_(self, frame):
+        self = objc.super(EyeBreakView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+
+        self.colors = BSOD_COLORS
+
+        # State machine: countdown -> timer -> done
+        self.phase = "countdown"  # countdown, timer, done
+        self.countdown_value = 5  # 5,4,3,2,1
+        self.timer_value = 20     # 20 second timer
+
+        return self
+
+    def drawRect_(self, rect):
+        """Draw the view content."""
+        bounds = self.bounds()
+        width = bounds.size.width
+        height = bounds.size.height
+
+        # Draw solid classic BSOD blue background
+        bg_color = hex_to_rgba(self.colors["bg"])
+        ns_bg = NSColor.colorWithCalibratedRed_green_blue_alpha_(*bg_color)
+        ns_bg.setFill()
+        NSBezierPath.fillRect_(bounds)
+
+        # Draw text based on phase
+        fg = hex_to_rgba(self.colors["fg"])
+        fg_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*fg)
+
+        paragraph = NSMutableParagraphStyle.alloc().init()
+        paragraph.setAlignment_(NSTextAlignmentCenter)
+
+        if self.phase == "countdown":
+            self._draw_countdown_phase(width, height, fg_color, paragraph)
+        elif self.phase == "timer":
+            self._draw_timer_phase(width, height, fg_color, paragraph)
+        elif self.phase == "done":
+            self._draw_done_phase(width, height, fg_color, paragraph)
+
+    def _draw_title_bar(self, width, height, text):
+        """Draw the classic Windows 9X style title bar with inverted colors."""
+        fg = hex_to_rgba(self.colors["fg"])
+        bg = hex_to_rgba(self.colors["bg"])
+
+        # White background bar
+        white_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*fg)
+        white_color.setFill()
+        bar_height = 32
+        bar_y = height - 180
+        NSBezierPath.fillRect_(NSMakeRect(width/2 - 200, bar_y, 400, bar_height))
+
+        # Blue text on white bar
+        blue_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*bg)
+        title_font = NSFont.fontWithName_size_("Menlo", 18) or NSFont.monospacedSystemFontOfSize_weight_(18, 0.0)
+        para = NSMutableParagraphStyle.alloc().init()
+        para.setAlignment_(NSTextAlignmentCenter)
+        title_attrs = {
+            NSForegroundColorAttributeName: blue_color,
+            NSFontAttributeName: title_font,
+            NSParagraphStyleAttributeName: para,
+        }
+        title_str = NSAttributedString.alloc().initWithString_attributes_(text, title_attrs)
+        title_rect = NSMakeRect(width/2 - 200, bar_y + 1, 400, bar_height)
+        title_str.drawInRect_(title_rect)
+
+    def _draw_countdown_phase(self, width, height, fg_color, paragraph):
+        """Draw the countdown phase (5,4,3,2,1) - Windows 9X BSOD style."""
+        # Draw title bar
+        self._draw_title_bar(width, height, "Eye Break")
+
+        # Use monospace font
+        mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
+
+        # Center-ish positioning for the main content
+        content_y = height / 2 + 100
+        line_height = 36
+        margin = width / 4
+
+        attrs = {
+            NSForegroundColorAttributeName: fg_color,
+            NSFontAttributeName: mono_font,
+            NSParagraphStyleAttributeName: paragraph,
+        }
+
+        lines = [
+            "An eye strain condition has been detected.",
+            "",
+            "To protect your vision, look at something",
+            "20 metres away for 20 seconds.",
+            "",
+            f"*  Starting in {self.countdown_value} seconds...",
+            "",
+            "",
+            "Press any key to continue _"
+        ]
+
+        for i, line in enumerate(lines):
+            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
+            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
+            line_str.drawInRect_(line_rect)
+
+    def _draw_timer_phase(self, width, height, fg_color, paragraph):
+        """Draw the timer phase (20 second countdown) - Windows 9X BSOD style."""
+        # Draw title bar
+        self._draw_title_bar(width, height, "Eye Break")
+
+        # Use monospace font
+        mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
+
+        # Center-ish positioning for the main content
+        content_y = height / 2 + 100
+        line_height = 36
+        margin = width / 4
+
+        attrs = {
+            NSForegroundColorAttributeName: fg_color,
+            NSFontAttributeName: mono_font,
+            NSParagraphStyleAttributeName: paragraph,
+        }
+
+        lines = [
+            "An eye strain condition has been detected.",
+            "",
+            "Look at something 20 metres away now.",
+            "",
+            f"*  Time remaining: {self.timer_value} seconds",
+            "",
+            "",
+            "",
+            "Please wait _"
+        ]
+
+        for i, line in enumerate(lines):
+            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
+            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
+            line_str.drawInRect_(line_rect)
+
+    def _draw_done_phase(self, width, height, fg_color, paragraph):
+        """Draw the done phase - Windows 9X BSOD style."""
+        # Draw title bar
+        self._draw_title_bar(width, height, "Eye Break")
+
+        # Use monospace font
+        mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
+
+        # Center-ish positioning for the main content
+        content_y = height / 2 + 100
+        line_height = 36
+        margin = width / 4
+
+        attrs = {
+            NSForegroundColorAttributeName: fg_color,
+            NSFontAttributeName: mono_font,
+            NSParagraphStyleAttributeName: paragraph,
+        }
+
+        lines = [
+            "Eye strain prevention complete.",
+            "",
+            "Your eyes have been successfully rested.",
+            "",
+            "*  Operation completed successfully.",
+            "",
+            "",
+            "",
+            "Resuming normal operation..."
+        ]
+
+        for i, line in enumerate(lines):
+            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
+            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
+            line_str.drawInRect_(line_rect)
+
+    def updateCountdown_(self, timer):
+        """Handle countdown phase (5,4,3,2,1)."""
+        if self.phase != "countdown":
+            return
+
+        if self.countdown_value > 1:
+            self.countdown_value -= 1
+            self.setNeedsDisplay_(True)
+        else:
+            # Transition to timer phase
+            self.phase = "timer"
+            timer.invalidate()
+            self.setNeedsDisplay_(True)
+            # Play start ding
+            self._play_ding()
+            # Start the 20-second timer
+            self._start_main_timer()
+
+    def _start_main_timer(self):
+        """Start the 20-second timer phase."""
+        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self, objc.selector(EyeBreakView.updateMainTimer_, signature=b'v@:@'), None, True
+        )
+
+    def updateMainTimer_(self, timer):
+        """Handle main timer phase (20 seconds)."""
+        if self.phase != "timer":
+            return
+
+        if self.timer_value > 1:
+            self.timer_value -= 1
+            self.setNeedsDisplay_(True)
+        else:
+            # Transition to done phase
+            self.phase = "done"
+            timer.invalidate()
+            self.setNeedsDisplay_(True)
+            # Play end ding
+            self._play_ding()
+            # Start close timer
+            self._start_close_timer()
+
+    def _start_close_timer(self):
+        """Start the close timer (1 second pause)."""
+        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self, objc.selector(EyeBreakView.closeApp_, signature=b'v@:@'), None, False
+        )
+
+    def closeApp_(self, timer):
+        """Close the application."""
+        release_lock()
+        NSApp.terminate_(None)
+
+    def _play_ding(self):
+        """Play a quiet ding sound."""
+        sound = NSSound.soundNamed_("Glass")
+        if sound:
+            sound.setVolume_(0.3)
+            sound.play()
+
+    def acceptsFirstResponder(self):
+        return True
+
+    def keyDown_(self, event):
+        """Consume key events to prevent beep."""
+        pass
+
+    def performKeyEquivalent_(self, event):
+        """Handle key equivalents to prevent system beep."""
+        return True
+
+    def mouseDown_(self, event):
+        """Consume mouse events."""
+        pass
+
+
+class EyeBreakAppMacOS:
+    """Native macOS implementation for eye break screen."""
+
+    def __init__(self):
+        self.app = NSApplication.sharedApplication()
+        self.app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+
+        # Get screen size
+        screen = NSScreen.mainScreen()
+        frame = screen.frame()
+
+        # Create fullscreen window
+        self.window = KeyableWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False
+        )
+
+        # High window level (same as quote display)
+        self.window.setLevel_(8)
+        self.window.setCollectionBehavior_(
+            NSWindowCollectionBehaviorFullScreenPrimary
+        )
+
+        # Create custom view
+        self.view = EyeBreakView.alloc().initWithFrame_(frame)
+
+        self.window.setContentView_(self.view)
+        self.window.makeFirstResponder_(self.view)
+
+        # Start countdown timer
+        self.countdown_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, self.view, objc.selector(EyeBreakView.updateCountdown_, signature=b'v@:@'), None, True
+        )
+
+    def run(self):
+        """Run the application."""
+        self.window.makeKeyAndOrderFront_(None)
+        self.app.activateIgnoringOtherApps_(True)
+        self.app.run()
+
+
 class InspirationAppMacOS:
     """Native macOS implementation using PyObjC."""
 
@@ -569,6 +1000,11 @@ def main():
         action="store_true",
         help="Test mode with 5 second delay"
     )
+    parser.add_argument(
+        "--eye-break",
+        action="store_true",
+        help="Show 20-20-20 eye break screen instead of quote"
+    )
     args = parser.parse_args()
 
     # Set delay override
@@ -577,20 +1013,48 @@ def main():
     elif args.delay is not None:
         _delay_override = args.delay
 
-    delay = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
+    # Determine mode
+    mode = "eye_break" if args.eye_break else "quote"
 
-    print("Starting Inspirational Quotes Display...")
-    print(f"The display will remain for {delay} seconds before you can close it.")
-    print("Use this time to reflect on the quote and set your intention for the day!")
+    # Try to acquire lock (prevents clash between quote and eye break)
+    if not acquire_lock(mode):
+        print(f"Another display is currently showing, skipping {mode}")
+        sys.exit(0)
 
-    if USE_PYOBJC:
-        print("Using native macOS (PyObjC) implementation...")
-        app = InspirationAppMacOS()
-    else:
-        print("Using tkinter implementation...")
-        app = InspirationAppTkinter()
+    # Check if user is in a video call - skip if so
+    in_call, reason = is_in_video_call()
+    if in_call:
+        print(f"Skipping {mode}: {reason}")
+        release_lock()
+        sys.exit(0)
 
-    app.run()
+    try:
+        if args.eye_break:
+            # Eye break mode
+            print("Starting 20-20-20 Eye Break...")
+            if USE_PYOBJC:
+                app = EyeBreakAppMacOS()
+            else:
+                print("Eye break mode requires macOS with PyObjC")
+                release_lock()
+                sys.exit(1)
+        else:
+            # Quote display mode
+            delay = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
+            print("Starting Inspirational Quotes Display...")
+            print(f"The display will remain for {delay} seconds before you can close it.")
+            print("Use this time to reflect on the quote and set your intention for the day!")
+
+            if USE_PYOBJC:
+                print("Using native macOS (PyObjC) implementation...")
+                app = InspirationAppMacOS()
+            else:
+                print("Using tkinter implementation...")
+                app = InspirationAppTkinter()
+
+        app.run()
+    finally:
+        release_lock()
 
 
 if __name__ == "__main__":

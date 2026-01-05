@@ -26,11 +26,15 @@ func log(_ message: String) {
 class ScreenUnlockWatcher {
     let scriptPath: String
     var lastTriggerTime: Date = Date.distantPast
+    var lastEyeBreakTriggerTime: Date = Date.distantPast
     let cooldownSeconds: TimeInterval = 60  // Prevent multiple triggers within 60 seconds
+    let eyeBreakIntervalSeconds: TimeInterval = 20 * 60  // 20 minutes
+    var eyeBreakTimer: Timer?
 
     init(scriptPath: String) {
         self.scriptPath = scriptPath
         setupNotifications()
+        setupEyeBreakTimer()
     }
 
     func setupNotifications() {
@@ -59,6 +63,41 @@ class ScreenUnlockWatcher {
         )
 
         log("Unlock watcher started. Listening for screen unlock events...")
+    }
+
+    func setupEyeBreakTimer() {
+        // Create a timer that fires every 20 minutes for eye breaks
+        eyeBreakTimer = Timer.scheduledTimer(withTimeInterval: eyeBreakIntervalSeconds, repeats: true) { [weak self] _ in
+            self?.triggerEyeBreak()
+        }
+        log("Eye break timer started. Will trigger every 20 minutes.")
+    }
+
+    func triggerEyeBreak() {
+        let now = Date()
+
+        // Check cooldown (don't trigger if quote just showed or eye break just showed)
+        if now.timeIntervalSince(lastTriggerTime) < cooldownSeconds {
+            log("Skipping eye break - quote display cooldown active")
+            return
+        }
+        if now.timeIntervalSince(lastEyeBreakTriggerTime) < cooldownSeconds {
+            log("Skipping eye break - eye break cooldown active")
+            return
+        }
+
+        lastEyeBreakTriggerTime = now
+        log("Triggering 20-20-20 eye break")
+
+        let task = Process()
+        task.launchPath = "/bin/bash"
+        task.arguments = [scriptPath, "--eye-break"]
+
+        do {
+            try task.run()
+        } catch {
+            log("Error launching eye break: \(error)")
+        }
     }
 
     @objc func screenUnlocked(_ notification: Notification) {
