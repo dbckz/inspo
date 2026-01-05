@@ -464,6 +464,7 @@ class QuoteView(NSView):
     def acceptsFirstResponder(self):
         return True
 
+    # TODO: fix pressing key not working to exit quote screen
     def keyDown_(self, event):
         """Handle key events - consume all keys to prevent system beep."""
         if self.can_exit:
