@@ -13,6 +13,7 @@ import math
 import sys
 import platform
 import argparse
+import time
 
 from config import (
     COLOR_SCHEMES,
@@ -76,7 +77,7 @@ class QuoteView(NSView):
         self.time_remaining = _delay_override if _delay_override is not None else EXIT_DELAY_SECONDS
         self.initial_delay = self.time_remaining  # Store for animation sync
         self.can_exit = False
-        self.animation_offset = 0
+        self.start_time = None  # Will be set on first animation frame
 
         # Floating decoration positions
         self.decorations = []
@@ -299,15 +300,14 @@ class QuoteView(NSView):
         """Animation timer callback."""
         height = int(self.bounds().size.height)
 
-        # Calculate animation speed so the line reaches top exactly when timer ends
-        # Animation runs at 20fps (0.05s interval), so total frames = initial_delay * 20
-        total_frames = self.initial_delay * 20
-        if total_frames > 0:
-            increment = height / total_frames
-        else:
-            increment = 2  # Fallback
+        # Initialize start time on first frame
+        if self.start_time is None:
+            self.start_time = time.time()
 
-        self.animation_offset = min(self.animation_offset + increment, height)
+        # Calculate animation position based on elapsed time (not frame count)
+        elapsed = time.time() - self.start_time
+        progress = min(elapsed / self.initial_delay, 1.0) if self.initial_delay > 0 else 1.0
+        self.animation_offset = progress * height
 
         # Update decorations
         width = self.bounds().size.width
