@@ -63,30 +63,36 @@ def is_camera_in_use() -> bool:
     """Check if the camera is currently in use on macOS."""
     import subprocess
     try:
-        # Check for processes using the camera via lsof
-        # AppleCamera and VDC Assistant are used when camera is active
+        # On modern macOS (Monterey+), check if the camera indicator is on
+        # by looking for apps that have camera entitlements active
+        # Method 1: Check for camera-using processes via log stream
         result = subprocess.run(
-            ["lsof", "/dev/video0"],
+            ["bash", "-c", "log show --predicate 'subsystem == \"com.apple.cmio\" AND eventMessage CONTAINS \"Start\"' --last 30s 2>/dev/null | grep -c Start"],
             capture_output=True,
             text=True,
             timeout=5
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-
-        # Also check via system profiler for camera usage
-        # This checks if any app has the camera open
-        result = subprocess.run(
-            ["bash", "-c", "lsof | grep -i 'AppleCamera\\|VDCAssistant\\|AppleH13Camera' | head -1"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.stdout.strip():
-            return True
-
+        if result.returncode == 0:
+            count = result.stdout.strip()
+            if count and int(count) > 0:
+                return True
     except Exception:
         pass
+
+    try:
+        # Method 2: Check for Brave/Chrome helper processes with camera access
+        # When browser uses camera, it spawns helper processes
+        result = subprocess.run(
+            ["bash", "-c", "ps aux | grep -E '(Chrome|Brave|Firefox|Safari).*Helper.*GPU' | grep -v grep"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        # If GPU helper is running, camera might be in use (not definitive)
+        # So we combine with other checks
+    except Exception:
+        pass
+
     return False
 
 
@@ -94,18 +100,23 @@ def get_meeting_window_titles() -> list:
     """Get window titles that might indicate a video call is in progress."""
     import subprocess
     try:
-        # Use AppleScript to get all window titles
+        # Use AppleScript to get all window titles with process names
+        # Output each on a separate line to avoid comma-parsing issues
         script = '''
         tell application "System Events"
-            set windowTitles to {}
+            set output to ""
             repeat with proc in (every process whose background only is false)
                 try
+                    set processName to name of proc
                     repeat with win in (every window of proc)
-                        set end of windowTitles to (name of win as text)
+                        try
+                            set windowName to name of win
+                            set output to output & processName & ": " & windowName & linefeed
+                        end try
                     end repeat
                 end try
             end repeat
-            return windowTitles
+            return output
         end tell
         '''
         result = subprocess.run(
@@ -115,10 +126,10 @@ def get_meeting_window_titles() -> list:
             timeout=10
         )
         if result.returncode == 0:
-            # Parse the AppleScript list output
+            # Parse line by line
             titles = result.stdout.strip()
             if titles:
-                return [t.strip() for t in titles.split(",")]
+                return [line.strip() for line in titles.split("\n") if line.strip()]
     except Exception:
         pass
     return []
@@ -129,27 +140,47 @@ def is_in_video_call() -> tuple[bool, str]:
     Check if user is currently in a video call.
     Returns (is_in_call, reason) tuple.
     """
-    # Check 1: Camera in use
-    if is_camera_in_use():
-        return True, "camera is in use"
-
-    # Check 2: Meeting window titles
+    # Check 1: Meeting window titles (most reliable)
     meeting_keywords = [
-        # Google Meet (note: uses en-dash – not hyphen -)
-        "meet.google.com", "Meet –", "Meet -", "Google Meet",
+        # Google Meet - various dash characters and formats
+        "meet.google.com", "Google Meet",
         # Zoom
         "Zoom Meeting", "zoom.us", "Zoom Webinar",
         # Microsoft Teams
         "Microsoft Teams", "Teams |", "| Teams",
-        # Generic
+        # Generic indicators
         "Screen Share", "Sharing your screen",
+        # Camera/microphone recording indicator (shows in browser title)
+        "Camera and microphone recording",
+        "microphone recording",
+        # Slack huddles
+        "Huddle",
+        # Discord (only when in voice)
+        "Voice Connected",
+        # FaceTime
+        "FaceTime",
+        # WebEx
+        "Webex",
     ]
+
+    # Also check for "Meet" followed by any dash variant and a meeting code
+    # Meeting codes are typically like "xxx-xxxx-xxx"
+    import re
+    meet_pattern = re.compile(r"Meet\s*[-–—]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}", re.IGNORECASE)
 
     window_titles = get_meeting_window_titles()
     for title in window_titles:
+        # Check regex pattern for Google Meet
+        if meet_pattern.search(title):
+            return True, f"meeting window detected: '{title[:50]}'"
+        # Check keywords
         for keyword in meeting_keywords:
             if keyword.lower() in title.lower():
                 return True, f"meeting window detected: '{title[:50]}'"
+
+    # Check 2: Camera in use (fallback, less reliable)
+    if is_camera_in_use():
+        return True, "camera is in use"
 
     return False, ""
 
