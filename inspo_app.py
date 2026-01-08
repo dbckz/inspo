@@ -206,11 +206,11 @@ if platform.system() == "Darwin":
             NSWindowCollectionBehaviorStationary,
             NSScreen, NSColor, NSFont, NSFontWeightBold,
             NSMutableParagraphStyle, NSTextAlignmentCenter,
-            NSMakeRect, NSAttributedString, NSTimer,
+            NSMakeRect, NSMakeSize, NSAttributedString, NSTimer,
             NSForegroundColorAttributeName, NSFontAttributeName,
             NSParagraphStyleAttributeName, NSRunLoop,
             NSDefaultRunLoopMode, NSApplicationActivationPolicyRegular,
-            NSBezierPath, NSSound,
+            NSBezierPath, NSSound, NSStringDrawingUsesLineFragmentOrigin,
         )
         from Quartz import CGMainDisplayID
         USE_PYOBJC = True
@@ -366,13 +366,20 @@ class QuoteView(NSView):
             f'"{self.quote_text}"', attrs
         )
 
-        # Calculate text position
-        text_size = quote_str.size()
+        # Calculate text position with proper wrapping support
+        text_width = width - 200
+        # Use boundingRectWithSize to get actual height when text wraps
+        bounding_rect = quote_str.boundingRectWithSize_options_(
+            NSMakeSize(text_width, height),  # Max size constraint
+            NSStringDrawingUsesLineFragmentOrigin  # Enable multi-line layout
+        )
+        text_height = bounding_rect.size.height
+
         quote_rect = NSMakeRect(
             100,
-            height / 2 - text_size.height / 2 + 50,
-            width - 200,
-            text_size.height + 100
+            height / 2 - text_height / 2 + 50,
+            text_width,
+            text_height + 20
         )
         quote_str.drawInRect_(quote_rect)
 
@@ -392,10 +399,12 @@ class QuoteView(NSView):
             )
 
             author_size = author_str.size()
+            # Position author below the quote (quote_rect.origin.y is the bottom of the quote)
+            quote_bottom_y = height / 2 - text_height / 2 + 50
             author_rect = NSMakeRect(
                 100,
-                height / 2 - author_size.height - 100,
-                width - 200,
+                quote_bottom_y - author_size.height - 30,
+                text_width,
                 author_size.height + 20
             )
             author_str.drawInRect_(author_rect)
