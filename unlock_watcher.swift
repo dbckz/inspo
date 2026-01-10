@@ -24,7 +24,7 @@ func log(_ message: String) {
     fflush(stdout)  // Ensure immediate output
 }
 
-class ScreenUnlockWatcher: NSObject {
+class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
     let scriptPath: String
     var lastTriggerTime: Date = Date.distantPast
     var lastEyeBreakTriggerTime: Date = Date.distantPast
@@ -36,11 +36,14 @@ class ScreenUnlockWatcher: NSObject {
     var statusItem: NSStatusItem!
     var countdownMenuItem: NSMenuItem!
     var pauseMenuItem: NSMenuItem!
-    var updateTimer: Timer?
+    var menuUpdateTimer: Timer?  // Timer for updating menu while open
+    var videoCallCheckTimer: Timer?  // Timer for checking video call status
 
     // Timer state
     var isPaused: Bool = false
+    var isAutoPaused: Bool = false  // Paused due to video call
     var nextBreakTime: Date = Date()
+    var remainingWhenPaused: TimeInterval = 0  // Store remaining time when auto-paused
 
     init(scriptPath: String) {
         self.scriptPath = scriptPath
@@ -84,21 +87,50 @@ class ScreenUnlockWatcher: NSObject {
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+        menu.delegate = self
 
-        // Update countdown every second
-        updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updateCountdownDisplay()
+        // Check video call status every 10 seconds
+        videoCallCheckTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            self?.checkVideoCallStatus()
         }
+
+        // Update status icon (not countdown, just pause status)
+        updateStatusIcon()
 
         log("Menu bar indicator initialized")
     }
 
-    func updateCountdownDisplay() {
-        if isPaused {
-            countdownMenuItem.title = "Timer paused"
-            if let button = statusItem.button {
+    // NSMenuDelegate - called when menu opens
+    func menuWillOpen(_ menu: NSMenu) {
+        updateCountdownDisplay()
+        // Start rapid updates while menu is open
+        // Must add to commonModes to work during menu tracking
+        menuUpdateTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.updateCountdownDisplay()
+        }
+        RunLoop.main.add(menuUpdateTimer!, forMode: .common)
+    }
+
+    // NSMenuDelegate - called when menu closes
+    func menuDidClose(_ menu: NSMenu) {
+        menuUpdateTimer?.invalidate()
+        menuUpdateTimer = nil
+    }
+
+    func updateStatusIcon() {
+        if let button = statusItem.button {
+            if isPaused || isAutoPaused {
                 button.title = "👁 ⏸"
+            } else {
+                button.title = "👁"
             }
+        }
+    }
+
+    func updateCountdownDisplay() {
+        if isPaused || isAutoPaused {
+            let pauseReason = isAutoPaused ? "paused (in call)" : "paused"
+            countdownMenuItem.title = "Timer \(pauseReason)"
             return
         }
 
@@ -107,11 +139,108 @@ class ScreenUnlockWatcher: NSObject {
             let minutes = Int(remaining) / 60
             let seconds = Int(remaining) % 60
             countdownMenuItem.title = String(format: "Next break in: %02d:%02d", minutes, seconds)
-            if let button = statusItem.button {
-                button.title = "👁"
-            }
         } else {
             countdownMenuItem.title = "Break time!"
+        }
+    }
+
+    func isInVideoCall() -> Bool {
+        let runningApps = NSWorkspace.shared.runningApplications
+
+        // Check if Zoom or Teams is running
+        for app in runningApps {
+            if let bundleId = app.bundleIdentifier {
+                // Zoom
+                if bundleId.lowercased().contains("zoom.us") {
+                    log("Video call detected: Zoom is running")
+                    return true
+                }
+                // Microsoft Teams
+                if bundleId.lowercased().contains("teams") || bundleId.lowercased().contains("msteams") {
+                    log("Video call detected: MS Teams is running")
+                    return true
+                }
+            }
+        }
+
+        // Check for Google Meet in browser tabs using AppleScript
+        if hasGoogleMeetTab() {
+            log("Video call detected: Google Meet tab open")
+            return true
+        }
+
+        return false
+    }
+
+    func hasGoogleMeetTab() -> Bool {
+        // Get list of running app names
+        let runningApps = NSWorkspace.shared.runningApplications
+        let runningAppNames = Set(runningApps.compactMap { $0.localizedName })
+
+        // Browser name to AppleScript name mapping
+        let browsers: [(processName: String, scriptName: String)] = [
+            ("Brave Browser", "Brave Browser"),
+            ("Google Chrome", "Google Chrome"),
+            ("Safari", "Safari"),
+            ("Firefox", "Firefox"),
+            ("Arc", "Arc"),
+            ("Microsoft Edge", "Microsoft Edge"),
+        ]
+
+        for browser in browsers {
+            // Only check browsers that are actually running
+            guard runningAppNames.contains(browser.processName) else {
+                continue
+            }
+
+            let script = """
+            tell application "\(browser.scriptName)"
+                set tabURLs to ""
+                try
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            set tabURLs to tabURLs & (URL of t) & linefeed
+                        end repeat
+                    end repeat
+                end try
+                return tabURLs
+            end tell
+            """
+
+            let appleScript = NSAppleScript(source: script)
+            var error: NSDictionary?
+            if let result = appleScript?.executeAndReturnError(&error) {
+                let urls = result.stringValue ?? ""
+                if urls.contains("meet.google.com") {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    func checkVideoCallStatus() {
+        let inCall = isInVideoCall()
+
+        if inCall && !isAutoPaused && !isPaused {
+            // Auto-pause: store remaining time
+            remainingWhenPaused = nextBreakTime.timeIntervalSince(Date())
+            isAutoPaused = true
+            eyeBreakTimer?.invalidate()
+            eyeBreakTimer = nil
+            updateStatusIcon()
+            log("Auto-paused: video call detected")
+        } else if !inCall && isAutoPaused {
+            // Auto-resume: restore remaining time
+            isAutoPaused = false
+            nextBreakTime = Date().addingTimeInterval(remainingWhenPaused)
+            eyeBreakTimer = Timer.scheduledTimer(withTimeInterval: remainingWhenPaused, repeats: false) { [weak self] _ in
+                self?.triggerEyeBreak()
+                self?.setupEyeBreakTimer()
+            }
+            updateStatusIcon()
+            log("Auto-resumed: video call ended, \(Int(remainingWhenPaused))s remaining")
         }
     }
 
@@ -134,6 +263,7 @@ class ScreenUnlockWatcher: NSObject {
             log("Eye break timer resumed")
         }
 
+        updateStatusIcon()
         updateCountdownDisplay()
     }
 

@@ -1,0 +1,19 @@
+# User-specific config with Google Doc URL
+config.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Compiled binary (compile with: swiftc -o unlock_watcher unlock_watcher.swift)
+unlock_watcher
+
+# Generated files
+uv.lock
+
+# Screenshots and other artifacts
+*.png
+*.log
+*.err
