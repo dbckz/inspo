@@ -11,6 +11,7 @@ Uses PyObjC for native macOS support (no Tcl/Tk dependency).
 """
 
 import random
+import re
 import math
 import sys
 import platform
@@ -79,20 +80,6 @@ def is_camera_in_use() -> bool:
     except Exception:
         pass
 
-    try:
-        # Method 2: Check for Brave/Chrome helper processes with camera access
-        # When browser uses camera, it spawns helper processes
-        result = subprocess.run(
-            ["bash", "-c", "ps aux | grep -E '(Chrome|Brave|Firefox|Safari).*Helper.*GPU' | grep -v grep"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        # If GPU helper is running, camera might be in use (not definitive)
-        # So we combine with other checks
-    except Exception:
-        pass
-
     return False
 
 
@@ -125,11 +112,8 @@ def get_meeting_window_titles() -> list:
             text=True,
             timeout=10
         )
-        if result.returncode == 0:
-            # Parse line by line
-            titles = result.stdout.strip()
-            if titles:
-                return [line.strip() for line in titles.split("\n") if line.strip()]
+        if result.returncode == 0 and result.stdout.strip():
+            return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
     except Exception:
         pass
     return []
@@ -165,7 +149,6 @@ def is_in_video_call() -> tuple[bool, str]:
 
     # Also check for "Meet" followed by any dash variant and a meeting code
     # Meeting codes are typically like "xxx-xxxx-xxx"
-    import re
     meet_pattern = re.compile(r"Meet\s*[-–—]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}", re.IGNORECASE)
 
     window_titles = get_meeting_window_titles()
@@ -258,7 +241,6 @@ class QuoteView(NSView):
 
         # Draw gradient background
         bg_color = hex_to_rgba(self.colors["bg"])
-        dark_color = self._darken_color(bg_color, 0.3)
 
         # Draw gradient with animated sweep line
         for i in range(0, int(height), 4):
@@ -340,16 +322,14 @@ class QuoteView(NSView):
         fg = hex_to_rgba(self.colors["fg"])
         fg_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*fg)
 
-        # Calculate font size based on quote length
+        # Calculate font size based on quote length (reduce for longer quotes)
+        quote_length = len(self.quote_text)
+        font_size_reductions = [(200, 16), (150, 12), (100, 8), (50, 4)]
         base_size = QUOTE_FONT_SIZE
-        if len(self.quote_text) > 200:
-            base_size -= 16
-        elif len(self.quote_text) > 150:
-            base_size -= 12
-        elif len(self.quote_text) > 100:
-            base_size -= 8
-        elif len(self.quote_text) > 50:
-            base_size -= 4
+        for threshold, reduction in font_size_reductions:
+            if quote_length > threshold:
+                base_size -= reduction
+                break
 
         quote_font = NSFont.boldSystemFontOfSize_(base_size)
 
@@ -453,15 +433,6 @@ class QuoteView(NSView):
             timer_size.height + 20
         )
         timer_str.drawInRect_(timer_rect)
-
-    def _darken_color(self, color, amount):
-        """Darken an RGBA color tuple."""
-        return (
-            color[0] * (1 - amount),
-            color[1] * (1 - amount),
-            color[2] * (1 - amount),
-            color[3]
-        )
 
     def animate_(self, timer):
         """Animation timer callback."""
@@ -611,15 +582,11 @@ class EyeBreakView(NSView):
         title_rect = NSMakeRect(width/2 - 200, bar_y + 1, 400, bar_height)
         title_str.drawInRect_(title_rect)
 
-    def _draw_countdown_phase(self, width, height, fg_color, paragraph):
-        """Draw the countdown phase (5,4,3,2,1) - Windows 9X BSOD style."""
-        # Draw title bar
+    def _draw_phase_content(self, width, height, fg_color, paragraph, lines):
+        """Draw phase content with BSOD-style layout."""
         self._draw_title_bar(width, height, "Eye Break")
 
-        # Use monospace font
         mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
-
-        # Center-ish positioning for the main content
         content_y = height / 2 + 100
         line_height = 36
         margin = width / 4
@@ -630,6 +597,13 @@ class EyeBreakView(NSView):
             NSParagraphStyleAttributeName: paragraph,
         }
 
+        for i, line in enumerate(lines):
+            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
+            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
+            line_str.drawInRect_(line_rect)
+
+    def _draw_countdown_phase(self, width, height, fg_color, paragraph):
+        """Draw the countdown phase (5,4,3,2,1)."""
         lines = [
             "An eye strain condition has been detected.",
             "",
@@ -641,31 +615,10 @@ class EyeBreakView(NSView):
             "",
             "Press any key to continue _"
         ]
-
-        for i, line in enumerate(lines):
-            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
-            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
-            line_str.drawInRect_(line_rect)
+        self._draw_phase_content(width, height, fg_color, paragraph, lines)
 
     def _draw_timer_phase(self, width, height, fg_color, paragraph):
-        """Draw the timer phase (20 second countdown) - Windows 9X BSOD style."""
-        # Draw title bar
-        self._draw_title_bar(width, height, "Eye Break")
-
-        # Use monospace font
-        mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
-
-        # Center-ish positioning for the main content
-        content_y = height / 2 + 100
-        line_height = 36
-        margin = width / 4
-
-        attrs = {
-            NSForegroundColorAttributeName: fg_color,
-            NSFontAttributeName: mono_font,
-            NSParagraphStyleAttributeName: paragraph,
-        }
-
+        """Draw the timer phase (20 second countdown)."""
         lines = [
             "An eye strain condition has been detected.",
             "",
@@ -677,31 +630,10 @@ class EyeBreakView(NSView):
             "",
             "Please wait _"
         ]
-
-        for i, line in enumerate(lines):
-            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
-            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
-            line_str.drawInRect_(line_rect)
+        self._draw_phase_content(width, height, fg_color, paragraph, lines)
 
     def _draw_done_phase(self, width, height, fg_color, paragraph):
-        """Draw the done phase - Windows 9X BSOD style."""
-        # Draw title bar
-        self._draw_title_bar(width, height, "Eye Break")
-
-        # Use monospace font
-        mono_font = NSFont.fontWithName_size_("Menlo", 20) or NSFont.monospacedSystemFontOfSize_weight_(20, 0.0)
-
-        # Center-ish positioning for the main content
-        content_y = height / 2 + 100
-        line_height = 36
-        margin = width / 4
-
-        attrs = {
-            NSForegroundColorAttributeName: fg_color,
-            NSFontAttributeName: mono_font,
-            NSParagraphStyleAttributeName: paragraph,
-        }
-
+        """Draw the done phase."""
         lines = [
             "Eye strain prevention complete.",
             "",
@@ -713,11 +645,7 @@ class EyeBreakView(NSView):
             "",
             "Resuming normal operation..."
         ]
-
-        for i, line in enumerate(lines):
-            line_str = NSAttributedString.alloc().initWithString_attributes_(line, attrs)
-            line_rect = NSMakeRect(margin, content_y - i * line_height, width - margin * 2, line_height)
-            line_str.drawInRect_(line_rect)
+        self._draw_phase_content(width, height, fg_color, paragraph, lines)
 
     def updateCountdown_(self, timer):
         """Handle countdown phase (5,4,3,2,1)."""

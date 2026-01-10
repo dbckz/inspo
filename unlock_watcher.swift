@@ -146,21 +146,18 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
 
     func isInVideoCall() -> Bool {
         let runningApps = NSWorkspace.shared.runningApplications
+        let bundleIds = runningApps.compactMap { $0.bundleIdentifier?.lowercased() }
 
-        // Check if Zoom or Teams is running
-        for app in runningApps {
-            if let bundleId = app.bundleIdentifier {
-                // Zoom
-                if bundleId.lowercased().contains("zoom.us") {
-                    log("Video call detected: Zoom is running")
-                    return true
-                }
-                // Microsoft Teams
-                if bundleId.lowercased().contains("teams") || bundleId.lowercased().contains("msteams") {
-                    log("Video call detected: MS Teams is running")
-                    return true
-                }
-            }
+        // Check if Zoom is running
+        if bundleIds.contains(where: { $0.contains("zoom.us") }) {
+            log("Video call detected: Zoom is running")
+            return true
+        }
+
+        // Check if Microsoft Teams is running
+        if bundleIds.contains(where: { $0.contains("teams") || $0.contains("msteams") }) {
+            log("Video call detected: MS Teams is running")
+            return true
         }
 
         // Check for Google Meet in browser tabs using AppleScript
@@ -311,6 +308,18 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
         log("Eye break timer started. Will trigger every 20 minutes.")
     }
 
+    func launchScript(arguments: [String], errorContext: String) {
+        let task = Process()
+        task.launchPath = "/bin/bash"
+        task.arguments = [scriptPath] + arguments
+
+        do {
+            try task.run()
+        } catch {
+            log("Error launching \(errorContext): \(error)")
+        }
+    }
+
     func triggerEyeBreak() {
         let now = Date()
 
@@ -327,16 +336,7 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
         lastEyeBreakTriggerTime = now
         nextBreakTime = now.addingTimeInterval(eyeBreakIntervalSeconds)
         log("Triggering 20-20-20 eye break")
-
-        let task = Process()
-        task.launchPath = "/bin/bash"
-        task.arguments = [scriptPath, "--eye-break"]
-
-        do {
-            try task.run()
-        } catch {
-            log("Error launching eye break: \(error)")
-        }
+        launchScript(arguments: ["--eye-break"], errorContext: "eye break")
     }
 
     @objc func screenUnlocked(_ notification: Notification) {
@@ -362,16 +362,7 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
 
         lastTriggerTime = now
         log("Triggering quote app: \(reason)")
-
-        let task = Process()
-        task.launchPath = "/bin/bash"
-        task.arguments = [scriptPath]
-
-        do {
-            try task.run()
-        } catch {
-            log("Error launching quote app: \(error)")
-        }
+        launchScript(arguments: [], errorContext: "quote app")
     }
 
     func run() {
