@@ -1,12 +1,12 @@
 """Configuration for the Inspirational Quotes App."""
 
-# Google Doc URL - Replace with your own Google Doc URL
-# The doc should be publicly shared (Anyone with the link can view)
-# Format: Each line in the document is treated as a separate quote
-GOOGLE_DOC_URL = "https://docs.google.com/document/d/YOUR_DOCUMENT_ID/edit"
-
-# Alternative: Use a direct export URL if you know the document ID
-# GOOGLE_DOC_ID = "YOUR_DOCUMENT_ID"
+# Import sensitive values from secrets.py (gitignored)
+try:
+    from secrets import GOOGLE_DOC_URL
+except ImportError:
+    print("Warning: secrets.py not found. Using fallback quotes.")
+    print("Create secrets.py with: GOOGLE_DOC_URL = 'your-google-doc-url'")
+    GOOGLE_DOC_URL = None
 
 # Display settings
 EXIT_DELAY_SECONDS = 30  # Time before exit is allowed

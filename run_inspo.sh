@@ -4,12 +4,12 @@
 ts() { date "+%Y-%m-%d %H:%M:%S"; }
 
 echo "$(ts) [INFO] Starting inspo app wrapper..."
-echo "$(ts) [INFO] Working directory: /Users/davebuckley/github/dbckz/inspo"
+echo "$(ts) [INFO] Working directory: /Users/davebuckley/github/dbckz/claude/inspo"
 
 # Wait a moment for the display to be ready after wake
 sleep 2
 
-cd "/Users/davebuckley/github/dbckz/inspo"
+cd "/Users/davebuckley/github/dbckz/claude/inspo"
 
 # Source shell profile to get uv and other tools in PATH
 if [ -f "$HOME/.zshrc" ]; then

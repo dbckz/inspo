@@ -1,5 +1,5 @@
-# User-specific config with Google Doc URL
-config.py
+# User-specific secrets (Google Doc URL, etc.)
+secrets.py
 
 # Python
 __pycache__/
