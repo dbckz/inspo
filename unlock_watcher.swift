@@ -352,6 +352,11 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
     }
 
     func triggerQuoteApp(reason: String) {
+        // Use objc_sync to make the cooldown check atomic
+        // This prevents race conditions when multiple notifications fire simultaneously
+        objc_sync_enter(self)
+        defer { objc_sync_exit(self) }
+
         let now = Date()
 
         // Check cooldown to prevent multiple triggers
