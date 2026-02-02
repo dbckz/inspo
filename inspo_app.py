@@ -322,42 +322,68 @@ class QuoteView(NSView):
         fg = hex_to_rgba(self.colors["fg"])
         fg_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(*fg)
 
-        # Calculate font size based on quote length (reduce for longer quotes)
-        quote_length = len(self.quote_text)
-        font_size_reductions = [(200, 16), (150, 12), (100, 8), (50, 4)]
-        base_size = QUOTE_FONT_SIZE
-        for threshold, reduction in font_size_reductions:
-            if quote_length > threshold:
-                base_size -= reduction
-                break
-
-        quote_font = NSFont.boldSystemFontOfSize_(base_size)
-
         paragraph = NSMutableParagraphStyle.alloc().init()
         paragraph.setAlignment_(NSTextAlignmentCenter)
 
-        attrs = {
-            NSForegroundColorAttributeName: fg_color,
-            NSFontAttributeName: quote_font,
-            NSParagraphStyleAttributeName: paragraph,
-        }
-
-        quote_str = NSAttributedString.alloc().initWithString_attributes_(
-            f'"{self.quote_text}"', attrs
-        )
-
-        # Calculate text position with proper wrapping support
         text_width = width - 200
-        # Use boundingRectWithSize to get actual height when text wraps
-        bounding_rect = quote_str.boundingRectWithSize_options_(
-            NSMakeSize(text_width, height),  # Max size constraint
-            NSStringDrawingUsesLineFragmentOrigin  # Enable multi-line layout
-        )
-        text_height = bounding_rect.size.height
+
+        # Define margins: top margin for corners, bottom margin for timer
+        top_margin = 180
+        bottom_margin = 140
+        available_height = height - top_margin - bottom_margin
+
+        # Calculate author height first (needed to compute total content height)
+        author_height = 0
+        author_spacing = 30
+        if self.author:
+            author_font = NSFont.systemFontOfSize_(AUTHOR_FONT_SIZE)
+            author_attrs_temp = {
+                NSFontAttributeName: author_font,
+            }
+            author_str_temp = NSAttributedString.alloc().initWithString_attributes_(
+                f"— {self.author}", author_attrs_temp
+            )
+            author_height = author_str_temp.size().height + author_spacing
+
+        # Iteratively reduce font size until content fits
+        base_size = QUOTE_FONT_SIZE
+        min_font_size = 24  # Don't go smaller than this
+
+        while base_size >= min_font_size:
+            quote_font = NSFont.boldSystemFontOfSize_(base_size)
+            attrs = {
+                NSForegroundColorAttributeName: fg_color,
+                NSFontAttributeName: quote_font,
+                NSParagraphStyleAttributeName: paragraph,
+            }
+            quote_str = NSAttributedString.alloc().initWithString_attributes_(
+                f'"{self.quote_text}"', attrs
+            )
+
+            # Calculate text height with wrapping
+            bounding_rect = quote_str.boundingRectWithSize_options_(
+                NSMakeSize(text_width, height),
+                NSStringDrawingUsesLineFragmentOrigin
+            )
+            text_height = bounding_rect.size.height
+
+            # Check if total content fits
+            total_content_height = text_height + author_height
+            if total_content_height <= available_height:
+                break
+
+            # Reduce font size and try again
+            base_size -= 4
+
+        # Center the content vertically in the available space
+        content_center_y = bottom_margin + available_height / 2
+
+        # Position quote above center, author below
+        quote_y = content_center_y + author_height / 2 - text_height / 2
 
         quote_rect = NSMakeRect(
             100,
-            height / 2 - text_height / 2 + 50,
+            quote_y,
             text_width,
             text_height + 20
         )
@@ -379,11 +405,9 @@ class QuoteView(NSView):
             )
 
             author_size = author_str.size()
-            # Position author below the quote (quote_rect.origin.y is the bottom of the quote)
-            quote_bottom_y = height / 2 - text_height / 2 + 50
             author_rect = NSMakeRect(
                 100,
-                quote_bottom_y - author_size.height - 30,
+                quote_y - author_size.height - author_spacing,
                 text_width,
                 author_size.height + 20
             )
