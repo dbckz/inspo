@@ -747,6 +747,30 @@ class EyeBreakView(NSView):
         pass
 
 
+def create_overlay_windows(bg_hex_color):
+    """Create overlay windows on all screens except the main screen."""
+    overlays = []
+    main_screen = NSScreen.mainScreen()
+    for screen in NSScreen.screens():
+        if screen == main_screen:
+            continue
+        sframe = screen.frame()
+        overlay = KeyableWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            sframe,
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False
+        )
+        overlay.setLevel_(8)
+        overlay.setCollectionBehavior_(NSWindowCollectionBehaviorFullScreenPrimary)
+        bg = hex_to_rgba(bg_hex_color)
+        overlay.setBackgroundColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(*bg)
+        )
+        overlays.append(overlay)
+    return overlays
+
+
 class EyeBreakAppMacOS:
     """Native macOS implementation for eye break screen."""
 
@@ -778,6 +802,9 @@ class EyeBreakAppMacOS:
         self.window.setContentView_(self.view)
         self.window.makeFirstResponder_(self.view)
 
+        # Cover all screens
+        self.overlay_windows = create_overlay_windows(BSOD_COLORS["bg"])
+
         # Start countdown timer
         self.countdown_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0, self.view, objc.selector(EyeBreakView.updateCountdown_, signature=b'v@:@'), None, True
@@ -785,6 +812,8 @@ class EyeBreakAppMacOS:
 
     def run(self):
         """Run the application."""
+        for overlay in self.overlay_windows:
+            overlay.orderFront_(None)
         self.window.makeKeyAndOrderFront_(None)
         self.app.activateIgnoringOtherApps_(True)
         self.app.run()
@@ -832,6 +861,9 @@ class InspirationAppMacOS:
         self.window.setContentView_(self.view)
         self.window.makeFirstResponder_(self.view)
 
+        # Cover all screens
+        self.overlay_windows = create_overlay_windows(self.colors["bg"])
+
         # Start animation timer (20fps)
         self.anim_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.05, self.view, objc.selector(QuoteView.animate_, signature=b'v@:@'), None, True
@@ -858,6 +890,8 @@ class InspirationAppMacOS:
 
     def run(self):
         """Run the application."""
+        for overlay in self.overlay_windows:
+            overlay.orderFront_(None)
         self.window.makeKeyAndOrderFront_(None)
         self.app.activateIgnoringOtherApps_(True)
         self.app.run()
