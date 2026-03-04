@@ -37,6 +37,7 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
     var countdownMenuItem: NSMenuItem!
     var pauseMenuItem: NSMenuItem!
     var menuUpdateTimer: Timer?  // Timer for updating menu while open
+    var statusUpdateTimer: Timer?  // Timer for updating menu bar title
     var videoCallCheckTimer: Timer?  // Timer for checking video call status
 
     // Timer state
@@ -94,8 +95,11 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
             self?.checkVideoCallStatus()
         }
 
-        // Update status icon (not countdown, just pause status)
+        // Update status icon with countdown every second
         updateStatusIcon()
+        statusUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateStatusIcon()
+        }
 
         log("Menu bar indicator initialized")
     }
@@ -122,7 +126,14 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
             if isPaused || isAutoPaused {
                 button.title = "👁 ⏸"
             } else {
-                button.title = "👁"
+                let remaining = nextBreakTime.timeIntervalSince(Date())
+                if remaining > 0 {
+                    let minutes = Int(remaining) / 60
+                    let seconds = Int(remaining) % 60
+                    button.title = String(format: "👁 %d:%02d", minutes, seconds)
+                } else {
+                    button.title = "👁"
+                }
             }
         }
     }
