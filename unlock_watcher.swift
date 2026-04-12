@@ -26,6 +26,7 @@ func log(_ message: String) {
 
 class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
     let scriptPath: String
+    let eyeBreakOnly: Bool
     var lastTriggerTime: Date = Date.distantPast
     var lastEyeBreakTriggerTime: Date = Date.distantPast
     let cooldownSeconds: TimeInterval = 60  // Prevent multiple triggers within 60 seconds
@@ -46,11 +47,14 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
     var nextBreakTime: Date = Date()
     var remainingWhenPaused: TimeInterval = 0  // Store remaining time when auto-paused
 
-    init(scriptPath: String) {
+    init(scriptPath: String, eyeBreakOnly: Bool = false) {
         self.scriptPath = scriptPath
+        self.eyeBreakOnly = eyeBreakOnly
         super.init()
         setupMenuBar()
-        setupNotifications()
+        if !eyeBreakOnly {
+            setupNotifications()
+        }
         setupEyeBreakTimer()
     }
 
@@ -388,13 +392,14 @@ class ScreenUnlockWatcher: NSObject, NSMenuDelegate {
 }
 
 // Main entry point
-let args = CommandLine.arguments
-guard args.count > 1 else {
-    log("Usage: unlock_watcher <path-to-run-script>")
+let args = Array(CommandLine.arguments.dropFirst())
+let eyeBreakOnly = args.contains("--eye-break-only")
+let positionalArgs = args.filter { !$0.hasPrefix("--") }
+
+guard let scriptPath = positionalArgs.first else {
+    log("Usage: unlock_watcher [--eye-break-only] <path-to-run-script>")
     exit(1)
 }
-
-let scriptPath = args[1]
 
 // Verify the script exists
 guard FileManager.default.fileExists(atPath: scriptPath) else {
@@ -402,8 +407,17 @@ guard FileManager.default.fileExists(atPath: scriptPath) else {
     exit(1)
 }
 
-// Setup as menu bar app (no dock icon)
-NSApplication.shared.setActivationPolicy(.accessory)
+if eyeBreakOnly {
+    log("Running in eye-break-only mode (no quotes on unlock)")
+}
 
-let watcher = ScreenUnlockWatcher(scriptPath: scriptPath)
+// Setup as menu bar app (no dock icon)
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
+let watcher = ScreenUnlockWatcher(scriptPath: scriptPath, eyeBreakOnly: eyeBreakOnly)
+
+// Activate to ensure menu bar items appear
+app.activate(ignoringOtherApps: true)
+
 watcher.run()
